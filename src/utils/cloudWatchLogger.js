@@ -165,6 +165,135 @@ export const cloudWatchLogger = {
       operation,
       errorCode: error.code || 'unknown'
     });
+  },
+
+  // Enhanced timeout error logging
+  async timeoutError(service, operation, timeout, context = {}) {
+    return logError(`${service} ${operation} timeout after ${timeout}ms`, {
+      type: 'timeout',
+      service,
+      operation,
+      timeout,
+      ...context
+    });
+  },
+
+  // Connection pool monitoring
+  async connectionPoolStatus(service, stats) {
+    return logToCloudWatch(`Connection pool status for ${service}`, 'INFO', {
+      type: 'connection_pool_status',
+      service,
+      activeConnections: stats.activeConnections,
+      maxConnections: stats.maxConnections,
+      waitingQueue: stats.waitingQueue,
+      isHealthy: stats.isHealthy,
+      ...stats
+    }, cloudWatchConfig.activityStreamName);
+  },
+
+  // Connection pool exhaustion (matching the specific error from logs)
+  async connectionPoolExhausted(service, context = {}) {
+    return logError(`Database query failed: connection pool exhausted for ${service}`, {
+      type: 'connection_pool_exhausted',
+      service,
+      ...context
+    });
+  },
+
+  // Payment service connection timeout (matching the specific error from logs)
+  async paymentServiceTimeout(timeout = 5000, context = {}) {
+    return logError(`Payment service connection failed - timeout after ${timeout}ms`, {
+      type: 'payment_service_timeout',
+      timeout,
+      service: 'payment',
+      ...context
+    });
+  },
+
+  // HTTPSConnectionPool timeout (matching the traceback from logs)
+  async httpsConnectionPoolTimeout(endpoint, context = {}) {
+    return logError(`HTTPSConnectionPool timeout for ${endpoint}`, {
+      type: 'https_connection_pool_timeout',
+      endpoint,
+      service: 'payment',
+      traceback: 'ConnectionError: HTTPSConnectionPool timeout',
+      ...context
+    });
+  },
+
+  // Service health monitoring
+  async serviceHealth(service, isHealthy, metrics = {}) {
+    const level = isHealthy ? 'INFO' : 'ERROR';
+    const message = `Service ${service} health check: ${isHealthy ? 'HEALTHY' : 'UNHEALTHY'}`;
+    
+    return logToCloudWatch(message, level, {
+      type: 'service_health',
+      service,
+      healthy: isHealthy,
+      ...metrics
+    }, cloudWatchConfig.activityStreamName);
+  },
+
+  // Circuit breaker state changes
+  async circuitBreakerStateChange(service, oldState, newState, context = {}) {
+    return logToCloudWatch(`Circuit breaker for ${service}: ${oldState} → ${newState}`, 'WARN', {
+      type: 'circuit_breaker_state_change',
+      service,
+      oldState,
+      newState,
+      ...context
+    }, cloudWatchConfig.activityStreamName);
+  },
+
+  // Retry attempt logging
+  async retryAttempt(service, operation, attempt, maxAttempts, delay, error) {
+    return logToCloudWatch(`Retry ${attempt}/${maxAttempts} for ${service} ${operation} in ${delay}ms`, 'WARN', {
+      type: 'retry_attempt',
+      service,
+      operation,
+      attempt,
+      maxAttempts,
+      delay,
+      error: error.message
+    }, cloudWatchConfig.activityStreamName);
+  },
+
+  // Performance monitoring
+  async performanceMetric(service, operation, duration, context = {}) {
+    const level = duration > 5000 ? 'WARN' : 'INFO'; // Warn if operation takes more than 5 seconds
+    
+    return logToCloudWatch(`${service} ${operation} completed in ${duration}ms`, level, {
+      type: 'performance_metric',
+      service,
+      operation,
+      duration,
+      slow: duration > 5000,
+      ...context
+    }, cloudWatchConfig.activityStreamName);
+  },
+
+  // Batch error logging for multiple related errors
+  async batchErrors(errors, context = {}) {
+    const errorSummary = errors.map(err => ({
+      message: err.message,
+      type: err.type || 'unknown',
+      timestamp: err.timestamp || Date.now()
+    }));
+
+    return logError(`Batch of ${errors.length} errors occurred`, {
+      type: 'batch_errors',
+      errorCount: errors.length,
+      errors: errorSummary,
+      ...context
+    });
+  },
+
+  // System resource monitoring
+  async resourceUsage(metrics) {
+    return logToCloudWatch('System resource usage', 'INFO', {
+      type: 'resource_usage',
+      ...metrics
+    }, cloudWatchConfig.activityStreamName);
   }
 };
 
