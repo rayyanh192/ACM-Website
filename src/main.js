@@ -30,6 +30,51 @@ import { cloudWatchLogger } from './utils/cloudWatchLogger';
 import '@mdi/font/css/materialdesignicons.css';
 import '@/assets/override.css';
 
+// Circuit breaker for logging to prevent cascading failures
+class LoggingCircuitBreaker {
+  constructor(failureThreshold = 5, resetTimeout = 60000) {
+    this.failureCount = 0;
+    this.failureThreshold = failureThreshold;
+    this.resetTimeout = resetTimeout;
+    this.state = 'CLOSED'; // CLOSED, OPEN, HALF_OPEN
+    this.nextAttempt = Date.now();
+  }
+
+  async execute(logFunction) {
+    if (this.state === 'OPEN') {
+      if (Date.now() < this.nextAttempt) {
+        console.log('Logging circuit breaker is OPEN, skipping log attempt');
+        return;
+      }
+      this.state = 'HALF_OPEN';
+    }
+
+    try {
+      await logFunction();
+      this.onSuccess();
+    } catch (error) {
+      this.onFailure();
+      console.warn('Logging failed:', error.message);
+    }
+  }
+
+  onSuccess() {
+    this.failureCount = 0;
+    this.state = 'CLOSED';
+  }
+
+  onFailure() {
+    this.failureCount++;
+    if (this.failureCount >= this.failureThreshold) {
+      this.state = 'OPEN';
+      this.nextAttempt = Date.now() + this.resetTimeout;
+      console.warn(`Logging circuit breaker opened after ${this.failureCount} failures. Will retry in ${this.resetTimeout/1000} seconds.`);
+    }
+  }
+}
+
+const loggingCircuitBreaker = new LoggingCircuitBreaker();
+
 const routes = [
   {
     path: "/",
@@ -194,15 +239,13 @@ const router = createRouter({
 });
 
 router.beforeEach( async (to, from) => {
-  // Log page navigation
-  try {
+  // Log page navigation with circuit breaker protection
+  loggingCircuitBreaker.execute(async () => {
     await cloudWatchLogger.logNavigation(from.path, to.path, {
       needsAuth: to.matched.some(record => record.meta.authRequired),
       hasPerms: to.matched.find(record => record.meta.permsRequired)?.meta?.permsRequired ? true : false
     });
-  } catch (error) {
-    console.log('Failed to log navigation:', error);
-  }
+  });
 
   //Check if the page we are going to requires a user to be signed in or admin permissions
   const needsAuth = to.matched.some(record => record.meta.authRequired);
@@ -243,16 +286,14 @@ router.beforeEach( async (to, from) => {
 
 // Log successful page views
 router.afterEach(async (to, from) => {
-  try {
+  loggingCircuitBreaker.execute(async () => {
     await cloudWatchLogger.logPageView(to.name || to.path, {
       from: from.path,
       to: to.path,
       params: to.params,
       query: to.query
     });
-  } catch (error) {
-    console.log('Failed to log page view:', error);
-  }
+  });
 });
 
 const vuetify = createVuetify({
@@ -268,13 +309,13 @@ app.config.errorHandler = (err, vm, info) => {
   console.error('Component:', vm);
   console.error('Info:', info);
   
-  // Log to CloudWatch
-  cloudWatchLogger.componentError(
-    err, 
-    vm?.$options?.name || 'Unknown', 
-    info || 'unknown'
-  ).catch(logError => {
-    console.error('Failed to log Vue error to CloudWatch:', logError);
+  // Log to CloudWatch with circuit breaker protection
+  loggingCircuitBreaker.execute(async () => {
+    await cloudWatchLogger.componentError(
+      err, 
+      vm?.$options?.name || 'Unknown', 
+      info || 'unknown'
+    );
   });
 };
 
@@ -282,26 +323,26 @@ app.config.errorHandler = (err, vm, info) => {
 window.addEventListener('unhandledrejection', (event) => {
   console.error('Unhandled Promise Rejection:', event.reason);
   
-  // Log to CloudWatch
-  cloudWatchLogger.error(
-    `Unhandled Promise Rejection: ${event.reason}`,
-    {
-      type: 'promise_rejection',
-      url: window.location.href,
-      userAgent: navigator.userAgent
-    }
-  ).catch(logError => {
-    console.error('Failed to log promise rejection to CloudWatch:', logError);
+  // Log to CloudWatch with circuit breaker protection
+  loggingCircuitBreaker.execute(async () => {
+    await cloudWatchLogger.error(
+      `Unhandled Promise Rejection: ${event.reason}`,
+      {
+        type: 'promise_rejection',
+        url: window.location.href,
+        userAgent: navigator.userAgent
+      }
+    );
   });
 });
 
 // Global activity logging
 window.addEventListener('click', async (event) => {
-  try {
-    const target = event.target;
-    const tagName = target.tagName.toLowerCase();
-    
-    // Log different types of clicks
+  const target = event.target;
+  const tagName = target.tagName.toLowerCase();
+  
+  // Log different types of clicks with circuit breaker protection
+  loggingCircuitBreaker.execute(async () => {
     if (tagName === 'button' || target.classList.contains('v-btn')) {
       await cloudWatchLogger.logButtonClick(target.textContent?.trim() || 'Unknown Button', {
         tagName: tagName,
@@ -322,27 +363,23 @@ window.addEventListener('click', async (event) => {
         id: target.id
       });
     }
-  } catch (error) {
-    console.log('Failed to log click activity:', error);
-  }
+  });
 });
 
 // Log form submissions
 window.addEventListener('submit', async (event) => {
-  try {
+  loggingCircuitBreaker.execute(async () => {
     await cloudWatchLogger.logUserAction('Form Submission', {
       formId: event.target.id,
       formClass: event.target.className,
       action: event.target.action
     });
-  } catch (error) {
-    console.log('Failed to log form submission:', error);
-  }
+  });
 });
 
 // Log authentication state changes
 auth.onAuthStateChanged(async (user) => {
-  try {
+  loggingCircuitBreaker.execute(async () => {
     if (user) {
       await cloudWatchLogger.logUserAction('User Signed In', {
         userId: user.uid,
@@ -354,27 +391,25 @@ auth.onAuthStateChanged(async (user) => {
         timestamp: new Date().toISOString()
       });
     }
-  } catch (error) {
-    console.log('Failed to log auth state change:', error);
-  }
+  });
 });
 
 // Global JavaScript error handler
 window.addEventListener('error', (event) => {
   console.error('Global JavaScript Error:', event.error);
   
-  // Log to CloudWatch
-  cloudWatchLogger.error(
-    `Global JavaScript Error: ${event.error?.message || event.message}`,
-    {
-      type: 'javascript_error',
-      filename: event.filename,
-      lineno: event.lineno,
-      colno: event.colno,
-      url: window.location.href
-    }
-  ).catch(logError => {
-    console.error('Failed to log JS error to CloudWatch:', logError);
+  // Log to CloudWatch with circuit breaker protection
+  loggingCircuitBreaker.execute(async () => {
+    await cloudWatchLogger.error(
+      `Global JavaScript Error: ${event.error?.message || event.message}`,
+      {
+        type: 'javascript_error',
+        filename: event.filename,
+        lineno: event.lineno,
+        colno: event.colno,
+        url: window.location.href
+      }
+    );
   });
 });
 

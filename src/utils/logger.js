@@ -57,7 +57,8 @@ class Logger {
    */
   async sendToCloudWatch(logData) {
     try {
-      const response = await fetch('/api/log-error', {
+      // Try Firebase function endpoint first
+      const response = await fetch('https://us-central1-acm-new.cloudfunctions.net/logError', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -71,8 +72,24 @@ class Logger {
 
       return await response.json();
     } catch (error) {
-      // If the API endpoint doesn't exist yet, we'll handle it gracefully
-      console.warn('CloudWatch API not available:', error.message);
+      // If the Firebase function fails, try local development endpoint
+      try {
+        const localResponse = await fetch('/api/log-error', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(logData)
+        });
+        
+        if (localResponse.ok) {
+          return await localResponse.json();
+        }
+      } catch (localError) {
+        // Both endpoints failed, log locally
+        console.warn('All CloudWatch endpoints unavailable:', error.message);
+      }
+      
       throw error;
     }
   }
