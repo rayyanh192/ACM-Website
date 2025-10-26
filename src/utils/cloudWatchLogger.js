@@ -6,12 +6,15 @@
 import AWS from 'aws-sdk';
 import { cloudWatchConfig } from '../config/cloudwatch';
 
-// Configure AWS CloudWatch Logs
-const logs = new AWS.CloudWatchLogs({
-  region: cloudWatchConfig.region,
-  accessKeyId: cloudWatchConfig.accessKeyId,
-  secretAccessKey: cloudWatchConfig.secretAccessKey
-});
+// Configure AWS CloudWatch Logs only if credentials are available
+let logs = null;
+if (cloudWatchConfig.isConfigured) {
+  logs = new AWS.CloudWatchLogs({
+    region: cloudWatchConfig.region,
+    accessKeyId: cloudWatchConfig.accessKeyId,
+    secretAccessKey: cloudWatchConfig.secretAccessKey
+  });
+}
 
 /**
  * Log any message to CloudWatch with specified level
@@ -21,9 +24,16 @@ const logs = new AWS.CloudWatchLogs({
  * @param {string} streamName - Optional custom stream name
  */
 async function logToCloudWatch(message, level = 'INFO', context = {}, streamName = null) {
+  // Always log to console as fallback
+  const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
+  console.log(`CloudWatch ${level}:`, message, context);
+
+  // If CloudWatch is not configured, only log to console
+  if (!cloudWatchConfig.isConfigured || !logs) {
+    return;
+  }
+
   try {
-    const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
-    
     await logs.putLogEvents({
       logGroupName: cloudWatchConfig.logGroupName,
       logStreamName: streamName || cloudWatchConfig.logStreamName,
@@ -33,11 +43,10 @@ async function logToCloudWatch(message, level = 'INFO', context = {}, streamName
       }]
     }).promise();
     
-    console.log(`${level} logged to CloudWatch:`, message);
+    console.log(`${level} logged to CloudWatch successfully`);
   } catch (err) {
-    console.log('Failed to log to CloudWatch:', err);
-    // Fallback: log to console
-    console.log(`${level} (fallback):`, message, context);
+    console.warn('Failed to log to CloudWatch:', err.message);
+    // Error is already logged to console above, so we don't need to do anything else
   }
 }
 
