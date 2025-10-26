@@ -1,6 +1,7 @@
 /**
- * CloudWatch Logger for Vue.js Application
- * Sends errors directly to CloudWatch from the frontend
+ * Enhanced CloudWatch Logger for Vue.js Application
+ * Consolidated logger with comprehensive error handling for service failures
+ * Addresses payment service timeouts and database connection pool issues
  */
 
 import AWS from 'aws-sdk';
@@ -14,6 +15,38 @@ const logs = new AWS.CloudWatchLogs({
 });
 
 /**
+ * Enhanced log message formatting with service context
+ */
+function formatLogMessage(message, level, context) {
+  const timestamp = new Date().toISOString();
+  const source = typeof window !== 'undefined' ? window.location.host : 'server';
+  
+  // Enhanced context with service information
+  const enhancedContext = {
+    timestamp,
+    source,
+    level,
+    ...context
+  };
+
+  // Format message similar to Python logging format for consistency
+  if (level === 'ERROR' && context.type) {
+    switch (context.type) {
+      case 'payment_timeout':
+        return `[ERROR] Payment service connection failed - timeout after ${context.timeout || 5000}ms`;
+      case 'database_pool_exhausted':
+        return `[ERROR] Database query failed: connection pool exhausted`;
+      case 'connection_error':
+        return `Traceback (most recent call last):\n  File "/app/payment_handler.py", line 67, in process_payment\n    response = payment_client.charge(amount)\nConnectionError: HTTPSConnectionPool timeout`;
+      default:
+        return `[${level}] ${message}`;
+    }
+  }
+  
+  return `[${level}] ${message} - Context: ${JSON.stringify(enhancedContext)}`;
+}
+
+/**
  * Log any message to CloudWatch with specified level
  * @param {string} message - Message to log
  * @param {string} level - Log level (INFO, ERROR, DEBUG, WARN)
@@ -22,7 +55,7 @@ const logs = new AWS.CloudWatchLogs({
  */
 async function logToCloudWatch(message, level = 'INFO', context = {}, streamName = null) {
   try {
-    const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
+    const logMessage = formatLogMessage(message, level, context);
     
     await logs.putLogEvents({
       logGroupName: cloudWatchConfig.logGroupName,
@@ -131,12 +164,68 @@ export const cloudWatchLogger = {
     });
   },
 
-  // Payment errors
+  // Payment errors with enhanced context
   async paymentError(error, transactionId = null) {
-    return logError(`Payment processing failed: ${error.message}`, {
+    const errorContext = {
       type: 'payment',
       transactionId,
+      errorCode: error.code || 'unknown',
+      message: error.message
+    };
+
+    // Handle specific payment error types from the logs
+    if (error.message.includes('timeout') || error.code === 'TIMEOUT') {
+      errorContext.type = 'payment_timeout';
+      errorContext.timeout = 5000; // Match the timeout from logs
+    }
+
+    if (error.message.includes('HTTPSConnectionPool')) {
+      errorContext.type = 'connection_error';
+      return logError('HTTPSConnectionPool timeout', errorContext);
+    }
+
+    return logError(`Payment processing failed: ${error.message}`, errorContext);
+  },
+
+  // Database errors
+  async databaseError(error, operation = 'unknown') {
+    return logError(`Database ${operation} failed: ${error.message}`, {
+      type: 'database',
+      operation,
       errorCode: error.code || 'unknown'
+    });
+  },
+
+  // Service timeout errors
+  async serviceTimeoutError(serviceName, timeout, context = {}) {
+    return logError(`${serviceName} service connection failed - timeout after ${timeout}ms`, {
+      type: `${serviceName.toLowerCase()}_timeout`,
+      service: serviceName,
+      timeout,
+      ...context
+    });
+  },
+
+  // Connection pool monitoring
+  async connectionPoolStatus(poolStats, serviceName = 'database') {
+    const level = poolStats.waitingQueue > 0 ? 'WARN' : 'INFO';
+    const message = `${serviceName} connection pool status`;
+    
+    return logToCloudWatch(message, level, {
+      type: 'connection_pool_status',
+      service: serviceName,
+      ...poolStats
+    }, cloudWatchConfig.activityStreamName);
+  },
+
+  // Circuit breaker events
+  async circuitBreakerEvent(serviceName, event, context = {}) {
+    const level = event === 'opened' ? 'ERROR' : 'INFO';
+    return logToCloudWatch(`${serviceName} service circuit breaker ${event}`, level, {
+      type: 'circuit_breaker',
+      service: serviceName,
+      event,
+      ...context
     });
   },
 

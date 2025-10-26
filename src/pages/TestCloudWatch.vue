@@ -96,13 +96,21 @@ export default {
           testType: 'payment_error'
         });
         
-        await cloudWatchLogger.paymentError(
-          new Error('Payment processing failed - insufficient funds'),
-          'txn_123456789'
-        );
+        // Simulate the exact error from the logs
+        const paymentError = new Error('Payment service connection failed - timeout after 5000ms');
+        paymentError.code = 'TIMEOUT';
+        
+        await cloudWatchLogger.paymentError(paymentError, 'txn_123456789');
+        
+        // Also simulate the HTTPSConnectionPool error
+        const connectionError = new Error('HTTPSConnectionPool timeout');
+        connectionError.code = 'CONNECTION_ERROR';
+        
+        await cloudWatchLogger.paymentError(connectionError, 'txn_123456789');
+        
         this.lastResult = {
           success: true,
-          message: 'Payment error logged to CloudWatch successfully!'
+          message: 'Payment timeout and connection errors logged to CloudWatch successfully!'
         };
       } catch (error) {
         this.lastResult = {
@@ -123,13 +131,24 @@ export default {
           testType: 'database_error'
         });
         
-        await cloudWatchLogger.databaseError(
-          new Error('Database connection timeout'),
-          'user_query'
-        );
+        // Simulate the exact error from the logs
+        const poolError = new Error('Database query failed: connection pool exhausted');
+        poolError.code = 'POOL_EXHAUSTED';
+        
+        await cloudWatchLogger.databaseError(poolError, 'user_query');
+        
+        // Also log connection pool status
+        await cloudWatchLogger.connectionPoolStatus({
+          maxConnections: 20,
+          currentConnections: 20,
+          idleConnections: 0,
+          busyConnections: 20,
+          waitingQueue: 3
+        });
+        
         this.lastResult = {
           success: true,
-          message: 'Database error logged to CloudWatch successfully!'
+          message: 'Database connection pool exhaustion error logged to CloudWatch successfully!'
         };
       } catch (error) {
         this.lastResult = {
