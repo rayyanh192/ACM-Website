@@ -28,8 +28,19 @@ import {auth} from './firebase';
 import { getUserPerms } from "./helpers";
 import { serverLogger } from './utils/serverLogger';
 import { cloudWatchLogger } from './utils/cloudWatchLogger';
+import { isCloudWatchEnabled } from './config/cloudwatch';
 import '@mdi/font/css/materialdesignicons.css';
 import '@/assets/override.css';
+
+// Safe logging wrapper that handles CloudWatch failures gracefully
+async function safeLog(logFunction, ...args) {
+  try {
+    await logFunction(...args);
+  } catch (error) {
+    // Silently fail CloudWatch logging to prevent user experience disruption
+    console.log('Logging failed (non-critical):', error.message);
+  }
+}
 
 const routes = [
   {
@@ -195,14 +206,12 @@ const router = createRouter({
 });
 
 router.beforeEach( async (to, from) => {
-  // Log page navigation
-  try {
-    await cloudWatchLogger.logNavigation(from.path, to.path, {
+  // Log page navigation with safe logging
+  if (isCloudWatchEnabled) {
+    safeLog(cloudWatchLogger.logNavigation, from.path, to.path, {
       needsAuth: to.matched.some(record => record.meta.authRequired),
       hasPerms: to.matched.find(record => record.meta.permsRequired)?.meta?.permsRequired ? true : false
     });
-  } catch (error) {
-    console.log('Failed to log navigation:', error);
   }
 
   //Check if the page we are going to requires a user to be signed in or admin permissions
@@ -242,17 +251,15 @@ router.beforeEach( async (to, from) => {
   return path;
 });
 
-// Log successful page views
+// Log successful page views with safe logging
 router.afterEach(async (to, from) => {
-  try {
-    await cloudWatchLogger.logPageView(to.name || to.path, {
+  if (isCloudWatchEnabled) {
+    safeLog(cloudWatchLogger.logPageView, to.name || to.path, {
       from: from.path,
       to: to.path,
       params: to.params,
       query: to.query
     });
-  } catch (error) {
-    console.log('Failed to log page view:', error);
   }
 });
 
@@ -269,35 +276,43 @@ app.config.errorHandler = (err, vm, info) => {
   console.error('Component:', vm);
   console.error('Info:', info);
   
-  // Log to CloudWatch
-  cloudWatchLogger.componentError(
-    err, 
-    vm?.$options?.name || 'Unknown', 
-    info || 'unknown'
-  ).catch(logError => {
-    console.error('Failed to log Vue error to CloudWatch:', logError);
-  });
+  // Log to CloudWatch with safe logging
+  if (isCloudWatchEnabled) {
+    safeLog(cloudWatchLogger.componentError, 
+      err, 
+      vm?.$options?.name || 'Unknown', 
+      info || 'unknown'
+    );
+  }
+};
+
+// Store event listener references for cleanup
+const eventListeners = {
+  unhandledRejection: null,
+  click: null,
+  submit: null,
+  error: null
 };
 
 // Global unhandled promise rejection handler
-window.addEventListener('unhandledrejection', (event) => {
+eventListeners.unhandledRejection = (event) => {
   console.error('Unhandled Promise Rejection:', event.reason);
   
-  // Log to CloudWatch
-  cloudWatchLogger.error(
-    `Unhandled Promise Rejection: ${event.reason}`,
-    {
-      type: 'promise_rejection',
-      url: window.location.href,
-      userAgent: navigator.userAgent
-    }
-  ).catch(logError => {
-    console.error('Failed to log promise rejection to CloudWatch:', logError);
-  });
-});
+  // Log to CloudWatch with safe logging
+  if (isCloudWatchEnabled) {
+    safeLog(cloudWatchLogger.error,
+      `Unhandled Promise Rejection: ${event.reason}`,
+      {
+        type: 'promise_rejection',
+        url: window.location.href,
+        userAgent: navigator.userAgent
+      }
+    );
+  }
+};
 
 // Global activity logging - creates nginx log entries
-window.addEventListener('click', async (event) => {
+eventListeners.click = async (event) => {
   try {
     const target = event.target;
     const tagName = target.tagName.toLowerCase();
@@ -309,57 +324,73 @@ window.addEventListener('click', async (event) => {
   } catch (error) {
     console.log('Failed to log click activity:', error);
   }
-});
+};
 
 // Log form submissions
-window.addEventListener('submit', async (event) => {
-  try {
-    await cloudWatchLogger.logUserAction('Form Submission', {
+eventListeners.submit = async (event) => {
+  if (isCloudWatchEnabled) {
+    safeLog(cloudWatchLogger.logUserAction, 'Form Submission', {
       formId: event.target.id,
       formClass: event.target.className,
       action: event.target.action
     });
-  } catch (error) {
-    console.log('Failed to log form submission:', error);
   }
-});
+};
+
+// Global JavaScript error handler
+eventListeners.error = (event) => {
+  console.error('Global JavaScript Error:', event.error);
+  
+  // Log to CloudWatch with safe logging
+  if (isCloudWatchEnabled) {
+    safeLog(cloudWatchLogger.error,
+      `Global JavaScript Error: ${event.error?.message || event.message}`,
+      {
+        type: 'javascript_error',
+        filename: event.filename,
+        lineno: event.lineno,
+        colno: event.colno,
+        url: window.location.href
+      }
+    );
+  }
+};
+
+// Add event listeners
+window.addEventListener('unhandledrejection', eventListeners.unhandledRejection);
+window.addEventListener('click', eventListeners.click);
+window.addEventListener('submit', eventListeners.submit);
+window.addEventListener('error', eventListeners.error);
 
 // Log authentication state changes
-auth.onAuthStateChanged(async (user) => {
-  try {
+const authStateUnsubscribe = auth.onAuthStateChanged(async (user) => {
+  if (isCloudWatchEnabled) {
     if (user) {
-      await cloudWatchLogger.logUserAction('User Signed In', {
+      safeLog(cloudWatchLogger.logUserAction, 'User Signed In', {
         userId: user.uid,
         email: user.email,
         provider: user.providerData[0]?.providerId
       });
     } else {
-      await cloudWatchLogger.logUserAction('User Signed Out', {
+      safeLog(cloudWatchLogger.logUserAction, 'User Signed Out', {
         timestamp: new Date().toISOString()
       });
     }
-  } catch (error) {
-    console.log('Failed to log auth state change:', error);
   }
 });
 
-// Global JavaScript error handler
-window.addEventListener('error', (event) => {
-  console.error('Global JavaScript Error:', event.error);
+// Cleanup function for when the app is unmounted
+window.addEventListener('beforeunload', () => {
+  // Remove event listeners
+  window.removeEventListener('unhandledrejection', eventListeners.unhandledRejection);
+  window.removeEventListener('click', eventListeners.click);
+  window.removeEventListener('submit', eventListeners.submit);
+  window.removeEventListener('error', eventListeners.error);
   
-  // Log to CloudWatch
-  cloudWatchLogger.error(
-    `Global JavaScript Error: ${event.error?.message || event.message}`,
-    {
-      type: 'javascript_error',
-      filename: event.filename,
-      lineno: event.lineno,
-      colno: event.colno,
-      url: window.location.href
-    }
-  ).catch(logError => {
-    console.error('Failed to log JS error to CloudWatch:', logError);
-  });
+  // Unsubscribe from auth state changes
+  if (authStateUnsubscribe) {
+    authStateUnsubscribe();
+  }
 });
 
 app.use(router);
