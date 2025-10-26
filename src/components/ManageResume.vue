@@ -28,7 +28,7 @@
 
 <script>
 import {storage, auth} from '../firebase';
-import cloudWatchLogger from '../utils/cloudwatch-logger';
+import cloudWatchLogger from '../utils/cloudWatchLogger';
 
   const fileSizeLimit = 5000000;
 
