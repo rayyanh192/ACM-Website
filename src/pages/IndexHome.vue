@@ -152,7 +152,6 @@
       :style="{ maxWidth: resourceContainerWidth + 'px' }"
     >
       <div class="resource-title">Resources</div>
-      <button @click="triggerError" class="error-test-btn">Test Button</button>
       <div class="event-sub-title">
         Utilize our resources to learn more about computer science and
         technology!
