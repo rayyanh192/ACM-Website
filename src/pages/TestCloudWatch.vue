@@ -69,6 +69,10 @@
 
 <script>
 import { cloudWatchLogger } from '@/utils/cloudWatchLogger';
+import { secureCloudWatchLogger } from '@/utils/secureCloudWatchLogger';
+
+// Use secure logger by default, fallback to direct logger if needed
+const logger = secureCloudWatchLogger.isAvailable() ? secureCloudWatchLogger : cloudWatchLogger;
 
 export default {
   name: 'TestCloudWatch',
@@ -91,12 +95,12 @@ export default {
       this.loading.payment = true;
       try {
         // Log button click
-        await cloudWatchLogger.logButtonClick('Test Payment Error', {
+        await logger.logButtonClick('Test Payment Error', {
           component: 'TestCloudWatch',
           testType: 'payment_error'
         });
         
-        await cloudWatchLogger.paymentError(
+        await logger.paymentError(
           new Error('Payment processing failed - insufficient funds'),
           'txn_123456789'
         );
