@@ -12,6 +12,11 @@ const nodemailer = require("nodemailer");
 const {tz} = require("moment-timezone");
 // const {App} = require("@slack/bolt");
 
+// Import new modules for payment processing and connection management
+const { PaymentHandler } = require("./payment_handler");
+const { databaseManager } = require("./database_config");
+const { connectionPoolManager } = require("./connection_pool");
+
 admin.initializeApp();
 
 exports.addRole = functions.https.onCall(async (data, context) => {
@@ -129,11 +134,19 @@ exports.getEventAttendance = functions.https.onCall( async (data, context) => {
         return {message: "Please pass an event id to the function"};
     }
 
-    const regRef = firestore().collection("registrations");
+    try {
+        // Use database manager with connection pooling
+        const registrations = await databaseManager.executeQuery(async (db) => {
+            const regRef = db.collection("registrations");
+            const snapshot = await regRef.where("event", "==", eventId).count().get();
+            return snapshot.data().count;
+        }, `getEventAttendance_${eventId}`);
 
-    const registrations = await regRef.where("event", "==", eventId).count().get();
-
-    return registrations.data().count;
+        return registrations;
+    } catch (error) {
+        console.error(`[ERROR] Database query failed: ${error.message}`);
+        throw new functions.https.HttpsError('internal', 'Database query failed: connection pool exhausted');
+    }
 });
 
 exports.getUserAttendance = functions.https.onCall( async (data, context) => {
@@ -143,10 +156,19 @@ exports.getUserAttendance = functions.https.onCall( async (data, context) => {
         return {message: "You must be logged in to call this function", code: 401};
     }
 
-    const regRef = firestore().collection("registrations");
+    try {
+        // Use database manager with connection pooling
+        const attendanceCount = await databaseManager.executeQuery(async (db) => {
+            const regRef = db.collection("registrations");
+            const attRef = await regRef.where("uid", "==", userId).count().get();
+            return attRef.data().count;
+        }, `getUserAttendance_${userId}`);
 
-    const attRef = await regRef.where("uid", "==", userId).count().get();
-    return attRef.data().count;
+        return attendanceCount;
+    } catch (error) {
+        console.error(`[ERROR] Database query failed: ${error.message}`);
+        throw new functions.https.HttpsError('internal', 'Database query failed: connection pool exhausted');
+    }
 });
 
 /* eslint-disable */
@@ -181,76 +203,89 @@ exports.sendEventNotificationsTest = functions.runWith({secrets: ["notificationS
 });
     
 async function sendEventMessages(discordWebhook /*,slackBotToken, slackAppToken,slackSigningSecret, slackChannel*/){
-    const eventRef = firestore().collection("events");
+    try {
+        // Use database manager with connection pooling for event queries
+        const workshopDocs = await databaseManager.executeQuery(async (db) => {
+            const eventRef = db.collection("events");
+            const workshop = await eventRef
+                .where("startDate", ">=", admin.firestore.Timestamp.fromMillis(new Date().getTime() + 60 * 60 * 7 * 1000))
+                .where("startDate", "<=", (admin.firestore.Timestamp.fromMillis(new Date().getTime() + 60 * 60 * (24+7) * 1000)))
+                .orderBy("startDate", "asc")
+                .get();
+            
+            return workshop.docs;
+        }, 'sendEventMessages_getEvents');
 
-    // Initialize Slack App
-    // const app = new App({
-    //     token: slackBotToken,
-    //     signingSecret: slackSigningSecret,
-    //     socketMode: true,
-    //     appToken: slackAppToken,
-    // });
-    // Get upcoming events
-    let workshop = await eventRef.where("startDate", ">=", admin.firestore.Timestamp.fromMillis(new Date().getTime() + 60 * 60 * 7 * 1000)).where("startDate", "<=", (admin.firestore.Timestamp.fromMillis(new Date().getTime() + 60 * 60 * (24+7) * 1000))).orderBy("startDate", "asc").get();// eslint-disable-line
-
-    if (workshop.empty) {
-        return "No Data";
-    }
-
-    // Send Messages
-    for (const doc of workshop.docs) {
-        var hasFlyer = false;
-        if (doc.data().flyer) {
-            hasFlyer = true;
-            var flyer = await admin.storage().bucket().file(doc.data().flyer).download();
+        if (!workshopDocs || workshopDocs.length === 0) {
+            return "No Data";
         }
 
-        // const slackTitle = "*Event Happening Tomorrow! " + doc.data().title + "*";
-        const discordTitle = "<@&1074916982748614758> **Event Happening Tomorrow! " + doc.data().title + "**";
+        // Initialize Slack App
+        // const app = new App({
+        //     token: slackBotToken,
+        //     signingSecret: slackSigningSecret,
+        //     socketMode: true,
+        //     appToken: slackAppToken,
+        // });
 
-        const messageBody = "\n" + formatDateTime(doc.data()) +
-        "\n" + doc.data().description;
+        // Send Messages
+        for (const doc of workshopDocs) {
+            var hasFlyer = false;
+            if (doc.data().flyer) {
+                hasFlyer = true;
+                var flyer = await admin.storage().bucket().file(doc.data().flyer).download();
+            }
 
-        // Send message to Slack
-        // const channel = slackChannel;
-        // if (hasFlyer) {
-        //     var slackResult = await app.client.files.upload({
-        //         channels: channel,
-        //         initial_comment: slackTitle + messageBody,
-        //         file: flyer[0],
-        //     });
-        // } else {
-        //     var slackResult = await app.client.chat.postMessage({
-        //         channels: channel,
-        //         text: slackTitle + messageBody,
-        //     });
-        // }
+            // const slackTitle = "*Event Happening Tomorrow! " + doc.data().title + "*";
+            const discordTitle = "<@&1074916982748614758> **Event Happening Tomorrow! " + doc.data().title + "**";
 
-        // Send message to Discord
-        let formdata = {
-            "content": discordTitle + messageBody,
-        };
-        if (hasFlyer) {
-            formdata = {
-                ...formdata,
-                "flyer": {
-                    "value": flyer[0],
-                    "options": {
-                        "filename": "flyer.png",
-                        "contentType": null,
-        }}};
-}
-        await request({
-            "method": "POST",
-            "url": discordWebhook,
-            "formData": formdata,
-            }, function(error, response) {
-            if (error) throw new Error(error);
-                console.log(response.body);
-        });
-        // await slackResult;
+            const messageBody = "\n" + formatDateTime(doc.data()) +
+            "\n" + doc.data().description;
+
+            // Send message to Slack
+            // const channel = slackChannel;
+            // if (hasFlyer) {
+            //     var slackResult = await app.client.files.upload({
+            //         channels: channel,
+            //         initial_comment: slackTitle + messageBody,
+            //         file: flyer[0],
+            //     });
+            // } else {
+            //     var slackResult = await app.client.chat.postMessage({
+            //         channels: channel,
+            //         text: slackTitle + messageBody,
+            //     });
+            // }
+
+            // Send message to Discord
+            let formdata = {
+                "content": discordTitle + messageBody,
+            };
+            if (hasFlyer) {
+                formdata = {
+                    ...formdata,
+                    "flyer": {
+                        "value": flyer[0],
+                        "options": {
+                            "filename": "flyer.png",
+                            "contentType": null,
+            }}};
     }
-    return "done";
+            await request({
+                "method": "POST",
+                "url": discordWebhook,
+                "formData": formdata,
+                }, function(error, response) {
+                if (error) throw new Error(error);
+                    console.log(response.body);
+            });
+            // await slackResult;
+        }
+        return "done";
+    } catch (error) {
+        console.error(`[ERROR] Database query failed in sendEventMessages: ${error.message}`);
+        throw error;
+    }
 }       
 
 exports.sendWelcomeEmail = functions.runWith({secrets: ["mailAppPassword"]})
@@ -311,4 +346,14 @@ function formatDateTime(event) {
     // Otherwise, return the start date and time and end date and time. Ex: Feb 12th, 2022, 10:00 am - Feb 13th, 2022, 12:00 pm
     return `${startDate} ${startTime} - ${endDate} ${endTime}`;
 }
+
+// Export functions from new modules
+const { processPayment } = require("./payment_handler");
+const { getDatabasePoolStatus } = require("./database_config");
+const { getConnectionPoolStats, resetCircuitBreakers } = require("./connection_pool");
+
+exports.processPayment = processPayment;
+exports.getDatabasePoolStatus = getDatabasePoolStatus;
+exports.getConnectionPoolStats = getConnectionPoolStats;
+exports.resetCircuitBreakers = resetCircuitBreakers;
 

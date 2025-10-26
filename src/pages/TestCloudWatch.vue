@@ -18,6 +18,15 @@
               </v-btn>
               
               <v-btn 
+                color="success" 
+                class="ma-2" 
+                @click="testPaymentProcessing"
+                :loading="loading.paymentProcessing"
+              >
+                Test Payment Processing
+              </v-btn>
+              
+              <v-btn 
                 color="warning" 
                 class="ma-2" 
                 @click="testDatabaseError"
@@ -29,10 +38,10 @@
               <v-btn 
                 color="info" 
                 class="ma-2" 
-                @click="testApiError"
-                :loading="loading.api"
+                @click="testConnectionPoolStatus"
+                :loading="loading.connectionPool"
               >
-                Test API Error
+                Check Connection Pool
               </v-btn>
               
               <v-btn 
@@ -77,8 +86,9 @@ export default {
     return {
       loading: {
         payment: false,
+        paymentProcessing: false,
         database: false,
-        api: false,
+        connectionPool: false,
         firebase: false,
         general: false
       },
@@ -114,6 +124,32 @@ export default {
       }
     },
     
+    async testPaymentProcessing() {
+      this.loading.paymentProcessing = true;
+      try {
+        // Log button click
+        await cloudWatchLogger.logButtonClick('Test Payment Processing', {
+          component: 'TestCloudWatch',
+          testType: 'payment_processing'
+        });
+        
+        // Test actual payment processing with timeout handling
+        const result = await cloudWatchLogger.processPayment(25.99, 'credit_card');
+        
+        this.lastResult = {
+          success: true,
+          message: `Payment processed successfully! Transaction ID: ${result.transactionId}`
+        };
+      } catch (error) {
+        this.lastResult = {
+          success: false,
+          message: `Payment processing failed: ${error.message}`
+        };
+      } finally {
+        this.loading.paymentProcessing = false;
+      }
+    },
+    
     async testDatabaseError() {
       this.loading.database = true;
       try {
@@ -141,30 +177,41 @@ export default {
       }
     },
     
-    async testApiError() {
-      this.loading.api = true;
+    async testConnectionPoolStatus() {
+      this.loading.connectionPool = true;
       try {
         // Log button click
-        await cloudWatchLogger.logButtonClick('Test API Error', {
+        await cloudWatchLogger.logButtonClick('Check Connection Pool Status', {
           component: 'TestCloudWatch',
-          testType: 'api_error'
+          testType: 'connection_pool_status'
         });
         
-        await cloudWatchLogger.apiError(
-          new Error('External API returned 500 error'),
-          '/api/external-service'
-        );
+        // Import Firebase functions
+        const { getFunctions, httpsCallable } = await import('firebase/functions');
+        const functions = getFunctions();
+        
+        // Get connection pool status
+        const getConnectionPoolStats = httpsCallable(functions, 'getConnectionPoolStats');
+        const getDatabasePoolStatus = httpsCallable(functions, 'getDatabasePoolStatus');
+        
+        const [connectionStats, databaseStats] = await Promise.all([
+          getConnectionPoolStats(),
+          getDatabasePoolStatus()
+        ]);
+        
         this.lastResult = {
           success: true,
-          message: 'API error logged to CloudWatch successfully!'
+          message: `Connection Pool Status Retrieved Successfully!
+Connection Pool: ${JSON.stringify(connectionStats.data, null, 2)}
+Database Pool: ${JSON.stringify(databaseStats.data, null, 2)}`
         };
       } catch (error) {
         this.lastResult = {
           success: false,
-          message: `Failed to log API error: ${error.message}`
+          message: `Failed to get connection pool status: ${error.message}`
         };
       } finally {
-        this.loading.api = false;
+        this.loading.connectionPool = false;
       }
     },
     
