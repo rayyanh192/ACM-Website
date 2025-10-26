@@ -91,7 +91,7 @@ import {db, auth} from '../firebase';
 import { debounce } from 'debounce';
 import { getUserPerms, majorsList } from '../helpers';
 import ManageResume from '../components/ManageResume.vue';
-import cloudWatchLogger from '../utils/cloudwatch-logger';
+import { cloudWatchLogger } from '../utils/cloudWatchLogger';
 
 export default {
   name: "ProfilePage",
