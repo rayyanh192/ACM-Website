@@ -27,6 +27,7 @@ import TestCloudWatch from "@/pages/TestCloudWatch.vue";
 import {auth} from './firebase';
 import { getUserPerms } from "./helpers";
 import { serverLogger } from './utils/serverLogger';
+import { cloudWatchLogger } from './utils/cloudWatchLogger';
 import '@mdi/font/css/materialdesignicons.css';
 import '@/assets/override.css';
 
@@ -363,4 +364,57 @@ window.addEventListener('error', (event) => {
 
 app.use(router);
 app.use(vuetify);
+
+// Initial database connection check and CloudWatch status logging
+(async () => {
+  try {
+    // Log CloudWatch configuration status
+    const cwStatus = cloudWatchLogger.getStatus();
+    console.log('CloudWatch Status:', cwStatus);
+    
+    if (cwStatus.enabled) {
+      await cloudWatchLogger.info('Application starting', {
+        type: 'startup',
+        cloudwatch_enabled: true,
+        timestamp: new Date().toISOString()
+      });
+    } else {
+      console.warn('CloudWatch logging is disabled. Check environment variables.');
+    }
+
+    // Check initial database connection
+    const { checkDatabaseConnection } = await import('./firebase');
+    const dbStatus = await checkDatabaseConnection();
+    
+    if (dbStatus.connected) {
+      console.log('Database connection: OK');
+      if (cwStatus.enabled) {
+        await cloudWatchLogger.info('Database connection established', {
+          type: 'database_connection',
+          status: 'connected'
+        });
+      }
+    } else {
+      console.error('Database connection: FAILED', dbStatus.error);
+      if (cwStatus.enabled) {
+        await cloudWatchLogger.error('Database connection failed at startup', {
+          type: 'database_connection',
+          status: 'failed',
+          error: dbStatus.error?.message
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Startup check failed:', error);
+    try {
+      await cloudWatchLogger.error('Application startup check failed', {
+        type: 'startup_error',
+        error: error.message
+      });
+    } catch (logError) {
+      console.error('Failed to log startup error:', logError);
+    }
+  }
+})();
+
 app.mount("#app")
