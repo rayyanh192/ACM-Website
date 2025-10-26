@@ -96,13 +96,20 @@ export default {
           testType: 'payment_error'
         });
         
+        // Test payment timeout error specifically
         await cloudWatchLogger.paymentError(
-          new Error('Payment processing failed - insufficient funds'),
-          'txn_123456789'
+          new Error('Payment service timeout'),
+          'txn_123456789',
+          {
+            type: 'timeout',
+            operation: 'payment_processing',
+            timeout: 30000,
+            processingTime: 31000
+          }
         );
         this.lastResult = {
           success: true,
-          message: 'Payment error logged to CloudWatch successfully!'
+          message: 'Payment timeout error logged to CloudWatch successfully!'
         };
       } catch (error) {
         this.lastResult = {

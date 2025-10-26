@@ -12,6 +12,9 @@ const nodemailer = require("nodemailer");
 const {tz} = require("moment-timezone");
 // const {App} = require("@slack/bolt");
 
+// Payment processing utilities
+const crypto = require("crypto");
+
 admin.initializeApp();
 
 exports.addRole = functions.https.onCall(async (data, context) => {
@@ -310,5 +313,188 @@ function formatDateTime(event) {
     }
     // Otherwise, return the start date and time and end date and time. Ex: Feb 12th, 2022, 10:00 am - Feb 13th, 2022, 12:00 pm
     return `${startDate} ${startTime} - ${endDate} ${endTime}`;
+}
+
+// Payment Processing Functions
+
+/**
+ * Process payment with timeout handling and comprehensive error management
+ */
+exports.processPayment = functions
+  .runWith({ 
+    timeoutSeconds: 60, // 1 minute timeout for the function
+    memory: '256MB'
+  })
+  .https.onCall(async (data, context) => {
+    const startTime = Date.now();
+    const transactionId = data.transactionId || generateTransactionId();
+    
+    try {
+      // Validate authentication
+      if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+      }
+
+      // Validate payment data
+      const validationResult = validatePaymentData(data);
+      if (!validationResult.valid) {
+        throw new functions.https.HttpsError('invalid-argument', validationResult.error);
+      }
+
+      // Log payment processing start
+      console.log(`Payment processing started: ${transactionId}`, {
+        userId: context.auth.uid,
+        amount: data.amount,
+        currency: data.currency,
+        provider: data.provider
+      });
+
+      // Process payment with timeout
+      const paymentResult = await processPaymentWithTimeout(data, transactionId, 30000); // 30 second timeout
+
+      // Store payment record
+      await storePaymentRecord({
+        transactionId,
+        userId: context.auth.uid,
+        amount: data.amount,
+        currency: data.currency,
+        provider: data.provider,
+        status: paymentResult.status,
+        paymentId: paymentResult.paymentId,
+        processingTime: Date.now() - startTime,
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      console.log(`Payment processed successfully: ${transactionId}`, {
+        paymentId: paymentResult.paymentId,
+        processingTime: Date.now() - startTime
+      });
+
+      return {
+        success: true,
+        transactionId,
+        paymentId: paymentResult.paymentId,
+        status: paymentResult.status,
+        processingTime: Date.now() - startTime
+      };
+
+    } catch (error) {
+      const processingTime = Date.now() - startTime;
+      
+      console.error(`Payment processing failed: ${transactionId}`, {
+        error: error.message,
+        processingTime,
+        userId: context.auth?.uid
+      });
+
+      // Store failed payment record
+      if (context.auth) {
+        await storePaymentRecord({
+          transactionId,
+          userId: context.auth.uid,
+          amount: data.amount,
+          currency: data.currency,
+          provider: data.provider,
+          status: 'failed',
+          error: error.message,
+          processingTime,
+          timestamp: admin.firestore.FieldValue.serverTimestamp()
+        });
+      }
+
+      // Handle timeout errors specifically
+      if (error.message.includes('timeout') || error.message.includes('TIMEOUT')) {
+        throw new functions.https.HttpsError('deadline-exceeded', 
+          'Payment processing timed out. Please try again.', 
+          { transactionId, processingTime });
+      }
+
+      // Re-throw Firebase errors as-is
+      if (error instanceof functions.https.HttpsError) {
+        throw error;
+      }
+
+      // Wrap other errors
+      throw new functions.https.HttpsError('internal', 
+        'Payment processing failed. Please try again.', 
+        { transactionId, processingTime });
+    }
+  });
+
+/**
+ * Validate payment data
+ */
+function validatePaymentData(data) {
+  if (!data.amount || typeof data.amount !== 'number' || data.amount <= 0) {
+    return { valid: false, error: 'Invalid payment amount' };
+  }
+
+  if (!data.currency || typeof data.currency !== 'string') {
+    return { valid: false, error: 'Invalid currency' };
+  }
+
+  if (!data.provider || typeof data.provider !== 'string') {
+    return { valid: false, error: 'Invalid payment provider' };
+  }
+
+  return { valid: true };
+}
+
+/**
+ * Process payment with timeout handling
+ */
+async function processPaymentWithTimeout(paymentData, transactionId, timeout = 30000) {
+  return new Promise(async (resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error(`Payment processing timeout after ${timeout}ms`));
+    }, timeout);
+
+    try {
+      const result = await mockPaymentProcessing(paymentData, transactionId);
+      clearTimeout(timeoutId);
+      resolve(result);
+    } catch (error) {
+      clearTimeout(timeoutId);
+      reject(error);
+    }
+  });
+}
+
+/**
+ * Mock payment processing (replace with actual payment provider integration)
+ */
+async function mockPaymentProcessing(paymentData, transactionId) {
+  await new Promise(resolve => setTimeout(resolve, Math.random() * 2000 + 1000));
+
+  if (Math.random() < 0.1) {
+    throw new Error('Payment processing failed - insufficient funds');
+  }
+
+  if (paymentData.simulateTimeout) {
+    await new Promise(resolve => setTimeout(resolve, 35000));
+  }
+
+  return {
+    paymentId: `pay_${transactionId}_${Date.now()}`,
+    status: 'completed',
+    amount: paymentData.amount,
+    currency: paymentData.currency,
+    provider: paymentData.provider
+  };
+}
+
+/**
+ * Store payment record in Firestore
+ */
+async function storePaymentRecord(paymentData) {
+  const paymentsRef = firestore().collection('payments');
+  await paymentsRef.doc(paymentData.transactionId).set(paymentData);
+}
+
+/**
+ * Generate unique transaction ID
+ */
+function generateTransactionId() {
+  return `txn_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
 }
 
