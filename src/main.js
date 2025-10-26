@@ -24,12 +24,16 @@ import AdminRoles from '@/pages/AdminRoles.vue';
 import AdminStats from "@/pages/AdminStats.vue";
 import TestCloudWatch from "@/pages/TestCloudWatch.vue";
 
-import {auth} from './firebase';
+import { auth } from './firebase';
 import { getUserPerms } from "./helpers";
 import { serverLogger } from './utils/serverLogger';
 import { cloudWatchLogger } from './utils/cloudWatchLogger';
+import { secureCloudWatchLogger } from './utils/secureCloudWatchLogger';
 import '@mdi/font/css/materialdesignicons.css';
 import '@/assets/override.css';
+
+// Use secure logger by default, fallback to direct logger if needed
+const logger = secureCloudWatchLogger.isAvailable() ? secureCloudWatchLogger : cloudWatchLogger;
 
 const routes = [
   {
@@ -197,7 +201,7 @@ const router = createRouter({
 router.beforeEach( async (to, from) => {
   // Log page navigation
   try {
-    await cloudWatchLogger.logNavigation(from.path, to.path, {
+    await logger.logNavigation(from.path, to.path, {
       needsAuth: to.matched.some(record => record.meta.authRequired),
       hasPerms: to.matched.find(record => record.meta.permsRequired)?.meta?.permsRequired ? true : false
     });
@@ -245,7 +249,7 @@ router.beforeEach( async (to, from) => {
 // Log successful page views
 router.afterEach(async (to, from) => {
   try {
-    await cloudWatchLogger.logPageView(to.name || to.path, {
+    await logger.logPageView(to.name || to.path, {
       from: from.path,
       to: to.path,
       params: to.params,
@@ -270,7 +274,7 @@ app.config.errorHandler = (err, vm, info) => {
   console.error('Info:', info);
   
   // Log to CloudWatch
-  cloudWatchLogger.componentError(
+  logger.componentError(
     err, 
     vm?.$options?.name || 'Unknown', 
     info || 'unknown'
@@ -284,7 +288,7 @@ window.addEventListener('unhandledrejection', (event) => {
   console.error('Unhandled Promise Rejection:', event.reason);
   
   // Log to CloudWatch
-  cloudWatchLogger.error(
+  logger.error(
     `Unhandled Promise Rejection: ${event.reason}`,
     {
       type: 'promise_rejection',
@@ -314,7 +318,7 @@ window.addEventListener('click', async (event) => {
 // Log form submissions
 window.addEventListener('submit', async (event) => {
   try {
-    await cloudWatchLogger.logUserAction('Form Submission', {
+    await logger.logUserAction('Form Submission', {
       formId: event.target.id,
       formClass: event.target.className,
       action: event.target.action
@@ -328,13 +332,13 @@ window.addEventListener('submit', async (event) => {
 auth.onAuthStateChanged(async (user) => {
   try {
     if (user) {
-      await cloudWatchLogger.logUserAction('User Signed In', {
+      await logger.logUserAction('User Signed In', {
         userId: user.uid,
         email: user.email,
         provider: user.providerData[0]?.providerId
       });
     } else {
-      await cloudWatchLogger.logUserAction('User Signed Out', {
+      await logger.logUserAction('User Signed Out', {
         timestamp: new Date().toISOString()
       });
     }
@@ -348,7 +352,7 @@ window.addEventListener('error', (event) => {
   console.error('Global JavaScript Error:', event.error);
   
   // Log to CloudWatch
-  cloudWatchLogger.error(
+  logger.error(
     `Global JavaScript Error: ${event.error?.message || event.message}`,
     {
       type: 'javascript_error',

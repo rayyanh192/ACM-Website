@@ -14,6 +14,51 @@ const {tz} = require("moment-timezone");
 
 admin.initializeApp();
 
+// CloudWatch logging proxy function
+exports.logToCloudWatch = functions.https.onCall(async (data, context) => {
+    try {
+        // Validate input
+        if (!data.message || !data.level) {
+            throw new functions.https.HttpsError('invalid-argument', 'Message and level are required');
+        }
+
+        // Import AWS SDK only when needed
+        const AWS = require('aws-sdk');
+        
+        // Configure CloudWatch with server-side credentials
+        const logs = new AWS.CloudWatchLogs({
+            region: process.env.AWS_REGION || 'us-east-1',
+            accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+            secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+        });
+
+        const logGroupName = process.env.LOG_GROUP_NAME || 'acm-website-logs';
+        const logStreamName = data.streamName || process.env.LOG_STREAM_NAME || 'error-stream';
+
+        // Add user context if authenticated
+        const userContext = context.auth ? {
+            uid: context.auth.uid,
+            email: context.auth.token.email
+        } : {};
+
+        const logMessage = `${data.level}: ${data.message} - Source: ${data.source || 'unknown'} - Context: ${JSON.stringify({...data.context, user: userContext})}`;
+
+        await logs.putLogEvents({
+            logGroupName,
+            logStreamName,
+            logEvents: [{
+                timestamp: Date.now(),
+                message: logMessage
+            }]
+        }).promise();
+
+        return { success: true, message: 'Logged to CloudWatch successfully' };
+    } catch (error) {
+        console.error('CloudWatch logging failed:', error);
+        throw new functions.https.HttpsError('internal', 'Failed to log to CloudWatch');
+    }
+});
+
 exports.addRole = functions.https.onCall(async (data, context) => {
     const isAdmin = context.auth.token.admin || false;
     if (!isAdmin) {

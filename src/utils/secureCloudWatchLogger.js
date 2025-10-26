@@ -1,44 +1,14 @@
 /**
- * CloudWatch Logger for Vue.js Application
- * Sends errors directly to CloudWatch from the frontend with graceful fallback
+ * Secure CloudWatch Logger for Vue.js Application
+ * Uses Firebase Functions as a proxy to avoid exposing AWS credentials in frontend
  */
 
-import AWS from 'aws-sdk';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 import { cloudWatchConfig } from '../config/cloudwatch';
 
-// Initialize CloudWatch Logs only if configuration is valid
-let logs = null;
-let isCloudWatchAvailable = false;
-
-// Initialize CloudWatch connection
-function initializeCloudWatch() {
-  if (!cloudWatchConfig.isValid()) {
-    console.log('CloudWatch logging disabled - invalid configuration');
-    return false;
-  }
-
-  if (!cloudWatchConfig.accessKeyId || !cloudWatchConfig.secretAccessKey) {
-    console.log('CloudWatch logging disabled - missing AWS credentials');
-    return false;
-  }
-
-  try {
-    logs = new AWS.CloudWatchLogs({
-      region: cloudWatchConfig.region,
-      accessKeyId: cloudWatchConfig.accessKeyId,
-      secretAccessKey: cloudWatchConfig.secretAccessKey
-    });
-    isCloudWatchAvailable = true;
-    console.log('CloudWatch logging initialized successfully');
-    return true;
-  } catch (error) {
-    console.warn('Failed to initialize CloudWatch:', error.message);
-    return false;
-  }
-}
-
-// Initialize on module load
-initializeCloudWatch();
+// Initialize Firebase Functions
+const functions = getFunctions();
+const logToCloudWatchFunction = httpsCallable(functions, 'logToCloudWatch');
 
 /**
  * Fallback logging to console with structured format
@@ -57,7 +27,7 @@ function fallbackLog(message, level = 'INFO', context = {}) {
 }
 
 /**
- * Log any message to CloudWatch with specified level
+ * Log any message to CloudWatch via Firebase Functions
  * @param {string} message - Message to log
  * @param {string} level - Log level (INFO, ERROR, DEBUG, WARN)
  * @param {Object} context - Additional context information
@@ -67,29 +37,26 @@ async function logToCloudWatch(message, level = 'INFO', context = {}, streamName
   // Always log to console as fallback
   fallbackLog(message, level, context);
   
-  // Skip CloudWatch if not available
-  if (!isCloudWatchAvailable || !logs) {
+  // Skip CloudWatch if not enabled
+  if (!cloudWatchConfig.enabled) {
     return;
   }
 
   try {
-    const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
-    
-    await logs.putLogEvents({
-      logGroupName: cloudWatchConfig.logGroupName,
-      logStreamName: streamName || cloudWatchConfig.logStreamName,
-      logEvents: [{
-        timestamp: Date.now(),
-        message: logMessage
-      }]
-    }).promise();
+    await logToCloudWatchFunction({
+      message,
+      level,
+      context,
+      streamName,
+      source: window.location.host
+    });
     
     if (process.env.NODE_ENV === 'development') {
-      console.log(`${level} logged to CloudWatch:`, message);
+      console.log(`${level} logged to CloudWatch via Firebase Function:`, message);
     }
   } catch (err) {
-    console.warn('Failed to log to CloudWatch:', err.message);
-    // CloudWatch failed, but we already logged to console as fallback
+    console.warn('Failed to log to CloudWatch via Firebase Function:', err.message);
+    // Firebase Function failed, but we already logged to console as fallback
   }
 }
 
@@ -103,18 +70,19 @@ async function logError(message, context = {}) {
 }
 
 /**
- * Comprehensive CloudWatch Logger with all log levels and graceful degradation
+ * Secure CloudWatch Logger with Firebase Functions proxy
  */
-export const cloudWatchLogger = {
+export const secureCloudWatchLogger = {
   // Configuration status
   isAvailable() {
-    return isCloudWatchAvailable;
+    return cloudWatchConfig.enabled;
   },
 
   getStatus() {
     return {
-      available: isCloudWatchAvailable,
-      config: cloudWatchConfig.getStatus()
+      available: cloudWatchConfig.enabled,
+      config: cloudWatchConfig.getStatus(),
+      proxy: 'Firebase Functions'
     };
   },
 
@@ -249,4 +217,4 @@ export const cloudWatchLogger = {
   _lastPageViewTime: 0
 };
 
-export default cloudWatchLogger;
+export default secureCloudWatchLogger;
