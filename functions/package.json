@@ -21,7 +21,12 @@
     "moment-timezone": "^0.5.48",
     "nodemailer": "^7.0.6",
     "request": "^2.88.2",
-    "tz": "^0.1.1"
+    "tz": "^0.1.1",
+    "stripe": "^14.9.0",
+    "axios": "^1.6.2",
+    "mysql2": "^3.6.5",
+    "pg": "^8.11.3",
+    "generic-pool": "^3.9.0"
   },
   "devDependencies": {
     "eslint": "^8.9.0",

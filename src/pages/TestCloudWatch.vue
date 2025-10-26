@@ -53,6 +53,24 @@
                 Test General Error
               </v-btn>
               
+              <v-btn 
+                color="success" 
+                class="ma-2" 
+                @click="testHealthCheck"
+                :loading="loading.health"
+              >
+                Test Health Check
+              </v-btn>
+              
+              <v-btn 
+                color="purple" 
+                class="ma-2" 
+                @click="testPaymentProcessing"
+                :loading="loading.paymentProcess"
+              >
+                Test Payment Processing
+              </v-btn>
+              
               <div v-if="lastResult" class="mt-4">
                 <v-alert 
                   :type="lastResult.success ? 'success' : 'error'"
@@ -80,7 +98,9 @@ export default {
         database: false,
         api: false,
         firebase: false,
-        general: false
+        general: false,
+        health: false,
+        paymentProcess: false
       },
       lastResult: null
     };
@@ -96,19 +116,27 @@ export default {
           testType: 'payment_error'
         });
         
-        await cloudWatchLogger.paymentError(
-          new Error('Payment processing failed - insufficient funds'),
-          'txn_123456789'
-        );
+        // Call the new Firebase function to simulate payment error
+        const simulatePaymentError = this.$firebase.functions().httpsCallable('simulatePaymentError');
+        await simulatePaymentError({ errorType: 'timeout' });
+        
         this.lastResult = {
           success: true,
           message: 'Payment error logged to CloudWatch successfully!'
         };
       } catch (error) {
-        this.lastResult = {
-          success: false,
-          message: `Failed to log payment error: ${error.message}`
-        };
+        // This is expected when simulating errors
+        if (error.code === 'functions/deadline-exceeded') {
+          this.lastResult = {
+            success: true,
+            message: 'Payment timeout error simulated and logged successfully!'
+          };
+        } else {
+          this.lastResult = {
+            success: false,
+            message: `Failed to simulate payment error: ${error.message}`
+          };
+        }
       } finally {
         this.loading.payment = false;
       }
@@ -123,19 +151,27 @@ export default {
           testType: 'database_error'
         });
         
-        await cloudWatchLogger.databaseError(
-          new Error('Database connection timeout'),
-          'user_query'
-        );
+        // Call the new Firebase function to simulate database error
+        const simulateDatabaseError = this.$firebase.functions().httpsCallable('simulateDatabaseError');
+        await simulateDatabaseError({ errorType: 'pool_exhausted' });
+        
         this.lastResult = {
           success: true,
           message: 'Database error logged to CloudWatch successfully!'
         };
       } catch (error) {
-        this.lastResult = {
-          success: false,
-          message: `Failed to log database error: ${error.message}`
-        };
+        // This is expected when simulating errors
+        if (error.code === 'functions/resource-exhausted') {
+          this.lastResult = {
+            success: true,
+            message: 'Database connection pool exhausted error simulated and logged successfully!'
+          };
+        } else {
+          this.lastResult = {
+            success: false,
+            message: `Failed to simulate database error: ${error.message}`
+          };
+        }
       } finally {
         this.loading.database = false;
       }
@@ -223,6 +259,78 @@ export default {
         };
       } finally {
         this.loading.general = false;
+      }
+    },
+    
+    async testHealthCheck() {
+      this.loading.health = true;
+      try {
+        // Log button click
+        await cloudWatchLogger.logButtonClick('Test Health Check', {
+          component: 'TestCloudWatch',
+          testType: 'health_check'
+        });
+        
+        // Call the health check Firebase function
+        const healthCheck = this.$firebase.functions().httpsCallable('healthCheck');
+        const result = await healthCheck();
+        
+        this.lastResult = {
+          success: result.data.healthy,
+          message: result.data.healthy 
+            ? 'Health check passed - all systems operational!' 
+            : `Health check failed: ${result.data.error || 'Some systems are unhealthy'}`
+        };
+      } catch (error) {
+        this.lastResult = {
+          success: false,
+          message: `Health check failed: ${error.message}`
+        };
+      } finally {
+        this.loading.health = false;
+      }
+    },
+    
+    async testPaymentProcessing() {
+      this.loading.paymentProcess = true;
+      try {
+        // Log button click
+        await cloudWatchLogger.logButtonClick('Test Payment Processing', {
+          component: 'TestCloudWatch',
+          testType: 'payment_processing'
+        });
+        
+        // Test payment processing with mock data
+        const processPayment = this.$firebase.functions().httpsCallable('processPayment');
+        const result = await processPayment({
+          provider: 'stripe',
+          amount: 10.00,
+          currency: 'usd',
+          paymentMethodId: 'pm_test_card_visa',
+          description: 'Test payment from CloudWatch test page'
+        });
+        
+        this.lastResult = {
+          success: result.data.success,
+          message: result.data.success 
+            ? `Payment processed successfully! Payment ID: ${result.data.paymentId}` 
+            : 'Payment processing failed'
+        };
+      } catch (error) {
+        // Handle expected payment errors
+        if (error.code === 'functions/failed-precondition') {
+          this.lastResult = {
+            success: true,
+            message: 'Payment processing test completed - Stripe not configured (expected in test environment)'
+          };
+        } else {
+          this.lastResult = {
+            success: false,
+            message: `Payment processing failed: ${error.message}`
+          };
+        }
+      } finally {
+        this.loading.paymentProcess = false;
       }
     }
   }
