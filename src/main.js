@@ -26,7 +26,7 @@ import TestCloudWatch from "@/pages/TestCloudWatch.vue";
 
 import {auth} from './firebase';
 import { getUserPerms } from "./helpers";
-import { cloudWatchLogger } from './utils/cloudWatchLogger';
+import { serverLogger } from './utils/serverLogger';
 import '@mdi/font/css/materialdesignicons.css';
 import '@/assets/override.css';
 
@@ -295,32 +295,15 @@ window.addEventListener('unhandledrejection', (event) => {
   });
 });
 
-// Global activity logging
+// Global activity logging - creates nginx log entries
 window.addEventListener('click', async (event) => {
   try {
     const target = event.target;
     const tagName = target.tagName.toLowerCase();
     
-    // Log different types of clicks
+    // Log button clicks to server (nginx will log the request)
     if (tagName === 'button' || target.classList.contains('v-btn')) {
-      await cloudWatchLogger.logButtonClick(target.textContent?.trim() || 'Unknown Button', {
-        tagName: tagName,
-        className: target.className,
-        id: target.id,
-        href: target.href || null
-      });
-    } else if (tagName === 'a') {
-      await cloudWatchLogger.logUserAction('Link Click', {
-        href: target.href,
-        text: target.textContent?.trim(),
-        target: target.target
-      });
-    } else if (target.classList.contains('v-text-field') || target.classList.contains('v-select')) {
-      await cloudWatchLogger.logUserAction('Form Field Interaction', {
-        fieldType: tagName,
-        className: target.className,
-        id: target.id
-      });
+      await serverLogger.logButtonClick(target.textContent?.trim() || 'Unknown Button');
     }
   } catch (error) {
     console.log('Failed to log click activity:', error);
