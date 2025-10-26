@@ -28,8 +28,60 @@ import {auth} from './firebase';
 import { getUserPerms } from "./helpers";
 import { serverLogger } from './utils/serverLogger';
 import { cloudWatchLogger } from './utils/cloudWatchLogger';
+import { healthMonitor } from './utils/healthMonitor';
+import { validateCloudWatchConfig, getSafeConfig } from './config/cloudwatch';
 import '@mdi/font/css/materialdesignicons.css';
 import '@/assets/override.css';
+
+// Initialize application monitoring and health checks
+async function initializeMonitoring() {
+  console.log('🚀 Initializing ACM Website Monitoring...');
+  
+  // Validate CloudWatch configuration
+  const configValidation = validateCloudWatchConfig();
+  const safeConfig = getSafeConfig();
+  
+  console.log('⚙️ CloudWatch Configuration:', safeConfig);
+  
+  if (configValidation.status === 'invalid') {
+    console.error('❌ CloudWatch Configuration Errors:', configValidation.errors);
+    await cloudWatchLogger.logSystemEvent('CloudWatch Configuration Invalid', {
+      errors: configValidation.errors,
+      warnings: configValidation.warnings
+    });
+  } else if (configValidation.status === 'warning') {
+    console.warn('⚠️ CloudWatch Configuration Warnings:', configValidation.warnings);
+    await cloudWatchLogger.logSystemEvent('CloudWatch Configuration Warnings', {
+      warnings: configValidation.warnings
+    });
+  } else {
+    console.log('✅ CloudWatch Configuration Valid');
+    await cloudWatchLogger.logSystemEvent('Application Started', {
+      config: safeConfig,
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  // Make health monitor available globally for fallback logging
+  window.healthMonitor = healthMonitor;
+  
+  // Initialize health monitoring
+  try {
+    await healthMonitor.initialize();
+    console.log('✅ Health Monitor Initialized');
+  } catch (error) {
+    console.error('❌ Health Monitor Initialization Failed:', error);
+    await cloudWatchLogger.error('Health Monitor initialization failed', {
+      error: error.message,
+      stack: error.stack
+    });
+  }
+}
+
+// Initialize monitoring (non-blocking)
+initializeMonitoring().catch(error => {
+  console.error('Failed to initialize monitoring:', error);
+});
 
 const routes = [
   {
