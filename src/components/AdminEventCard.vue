@@ -58,7 +58,7 @@ export default {
   },
 
   methods: {
-    async handleBadClick() {
+    handleBadClick() {
       // These will cause runtime errors
       console.log(this.event.details.title.toUpperCase());
       this.event.attendees.forEach(attendee => {
