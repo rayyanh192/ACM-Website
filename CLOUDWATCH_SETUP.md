@@ -1,12 +1,20 @@
 # CloudWatch Integration Setup Guide
 
-This guide walks you through setting up CloudWatch logging for your Vue.js ACM website.
+This guide walks you through setting up CloudWatch logging for your Vue.js ACM website using Firebase Functions for secure logging.
+
+## Architecture Overview
+
+The CloudWatch integration uses a secure architecture:
+- Frontend logs errors via Firebase Functions (no AWS credentials exposed)
+- Firebase Functions securely send logs to CloudWatch using server-side credentials
+- AWS credentials are stored as Firebase Function secrets
 
 ## Prerequisites
 
 1. AWS Account with CloudWatch Logs permissions
 2. AWS Access Key ID and Secret Access Key
-3. Your website deployed and accessible
+3. Firebase project with Functions enabled
+4. Your website deployed and accessible
 
 ## Step 1: Get AWS Credentials
 
@@ -16,32 +24,23 @@ aws configure list
 # Note down: AWS Access Key ID and Secret Access Key
 ```
 
-## Step 2: Set Environment Variables
+## Step 2: Configure Firebase Function Secrets
 
-### Option A: Local Development (.env file)
-Create a `.env` file in your project root:
+### Set up CloudWatch secrets for Firebase Functions
 ```bash
-VUE_APP_AWS_ACCESS_KEY_ID=your_access_key_here
-VUE_APP_AWS_SECRET_ACCESS_KEY=your_secret_key_here
-VUE_APP_AWS_REGION=us-east-1
-VUE_APP_CLOUDWATCH_LOG_GROUP=/aws/lambda/checkout-api
-VUE_APP_CLOUDWATCH_LOG_STREAM=website-errors
-VUE_APP_CLOUDWATCH_ACTIVITY_STREAM=website-activity
-```
+# Navigate to your functions directory
+cd functions
 
-### Option B: EC2 Server Environment
-Add to your EC2 instance environment:
-```bash
-export VUE_APP_AWS_ACCESS_KEY_ID=your_access_key_here
-export VUE_APP_AWS_SECRET_ACCESS_KEY=your_secret_key_here
-export VUE_APP_AWS_REGION=us-east-1
+# Set the CloudWatch secrets (replace with your actual values)
+firebase functions:secrets:set cloudWatchSecrets --data '{
+  "AWS_ACCESS_KEY_ID": "your_access_key_here",
+  "AWS_SECRET_ACCESS_KEY": "your_secret_key_here", 
+  "AWS_REGION": "us-east-1",
+  "LOG_GROUP_NAME": "acm-website-logs",
+  "ERROR_STREAM_NAME": "error-stream",
+  "ACTIVITY_STREAM_NAME": "activity-stream"
+}'
 ```
-
-### Option C: Hosting Platform (Vercel/Netlify)
-Add in your hosting platform's environment variables section:
-- VUE_APP_AWS_ACCESS_KEY_ID
-- VUE_APP_AWS_SECRET_ACCESS_KEY
-- VUE_APP_AWS_REGION
 
 ## Step 3: AWS IAM Permissions
 
@@ -54,7 +53,7 @@ Your AWS credentials need these CloudWatch Logs permissions:
             "Effect": "Allow",
             "Action": [
                 "logs:CreateLogGroup",
-                "logs:CreateLogStream",
+                "logs:CreateLogStream", 
                 "logs:PutLogEvents",
                 "logs:DescribeLogGroups",
                 "logs:DescribeLogStreams"
@@ -65,7 +64,18 @@ Your AWS credentials need these CloudWatch Logs permissions:
 }
 ```
 
-## Step 4: Deploy Your Website
+## Step 4: Deploy Firebase Functions
+
+```bash
+# Install dependencies
+cd functions
+npm install
+
+# Deploy the CloudWatch logging function
+firebase deploy --only functions:logToCloudWatch
+```
+
+## Step 5: Deploy Your Website
 
 ```bash
 # Build and deploy your updated website
@@ -73,7 +83,7 @@ npm run build
 # Deploy to your hosting platform
 ```
 
-## Step 5: Test the Integration
+## Step 6: Test the Integration
 
 ### Test via Browser
 Visit: `https://your-website.com/test-cloudwatch`
@@ -91,20 +101,20 @@ Click the test buttons to trigger different error types:
 curl "https://your-website.com/test-cloudwatch"
 ```
 
-## Step 6: Verify CloudWatch Logs
+## Step 7: Verify CloudWatch Logs
 
 ### Check if logs arrived (wait 1-2 minutes)
 ```bash
 # Check error logs
 aws logs filter-log-events \
-  --log-group-name /aws/lambda/checkout-api \
-  --log-stream-name website-errors \
+  --log-group-name acm-website-logs \
+  --log-stream-name error-stream \
   --start-time $(date -v-5M +%s000)
 
 # Check activity logs
 aws logs filter-log-events \
-  --log-group-name /aws/lambda/checkout-api \
-  --log-stream-name website-activity \
+  --log-group-name acm-website-logs \
+  --log-stream-name activity-stream \
   --start-time $(date -v-5M +%s000)
 ```
 
@@ -113,18 +123,18 @@ aws logs filter-log-events \
 aws cloudwatch describe-alarms --alarm-names QuietOps-ErrorSpike
 ```
 
-## Step 7: Monitor Real Errors
+## Step 8: Monitor Real Errors
 
 The integration will automatically log:
 
-**Error Logs (website-errors stream):**
+**Error Logs (error-stream):**
 - Vue component errors
 - Firebase operation failures
 - Unhandled JavaScript errors
 - Unhandled promise rejections
 - Custom errors from your components
 
-**Activity Logs (website-activity stream):**
+**Activity Logs (activity-stream):**
 - Page views and navigation
 - Button clicks
 - Form submissions
@@ -138,29 +148,42 @@ The integration will automatically log:
 ### Common Issues
 
 1. **"Failed to log to CloudWatch" errors**
-   - Check AWS credentials are correct
-   - Verify IAM permissions
-   - Ensure log group exists
+   - Check Firebase Function secrets are set correctly
+   - Verify AWS credentials have proper IAM permissions
+   - Ensure CloudWatch log group exists
+   - Check Firebase Functions deployment status
 
-2. **Environment variables not loading**
-   - Restart your development server
-   - Check variable names start with `VUE_APP_`
-   - Verify .env file is in project root
+2. **Firebase Function errors**
+   - Check function logs: `firebase functions:log`
+   - Verify secrets are properly configured
+   - Ensure AWS SDK is installed in functions
 
-3. **CORS errors**
-   - CloudWatch API calls are made from browser
-   - Ensure your AWS credentials allow browser access
-   - Consider using Firebase Functions as proxy
+3. **Frontend connection issues**
+   - Verify Firebase Functions are deployed
+   - Check browser console for Firebase errors
+   - Ensure Firebase project is properly configured
 
 ### Debug Mode
 Set `NODE_ENV=development` to see detailed console logs.
 
+### Check Firebase Function Status
+```bash
+# View function logs
+firebase functions:log --only logToCloudWatch
+
+# Check function deployment
+firebase functions:list
+```
+
 ## Security Notes
 
+- ✅ AWS credentials are securely stored as Firebase Function secrets
+- ✅ No sensitive credentials exposed to frontend/browser
+- ✅ All logging goes through secure Firebase Functions
+- ✅ Frontend cannot directly access AWS services
 - Never commit AWS credentials to version control
-- Use environment variables for all sensitive data
-- Consider using AWS IAM roles for EC2 instances
 - Regularly rotate your AWS access keys
+- Monitor Firebase Function usage and costs
 
 ## Next Steps
 
@@ -168,3 +191,4 @@ Set `NODE_ENV=development` to see detailed console logs.
 2. Create dashboards for monitoring
 3. Add more specific error logging to critical components
 4. Set up automated notifications for critical errors
+5. Configure log retention policies in CloudWatch

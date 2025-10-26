@@ -3,10 +3,14 @@
  * Handles error logging and sends data to CloudWatch via Firebase Functions
  */
 
+import { getFunctions, httpsCallable } from 'firebase/functions';
+
+// Get Firebase Functions instance
+const functions = getFunctions();
+const logToCloudWatchFunction = httpsCallable(functions, 'logToCloudWatch');
+
 class Logger {
   constructor() {
-    this.logGroupName = '/aws/lambda/checkout-api'; // Your CloudWatch log group
-    this.logStreamName = 'website-errors';
     this.isDevelopment = process.env.NODE_ENV === 'development';
   }
 
@@ -16,33 +20,28 @@ class Logger {
    * @param {Object} context - Additional context information
    * @param {string} level - Log level (error, warn, info)
    */
-  async logError(error, context = {}, level = 'error') {
+  async logError(error, context = {}, level = 'ERROR') {
     try {
       const errorMessage = error instanceof Error ? error.message : error;
       const errorStack = error instanceof Error ? error.stack : null;
       
-      const logData = {
-        timestamp: Date.now(),
-        level: level,
-        message: errorMessage,
+      const logContext = {
+        url: window.location.href,
+        userAgent: navigator.userAgent,
+        userId: context.userId || null,
+        component: context.component || 'unknown',
+        action: context.action || 'unknown',
         stack: errorStack,
-        context: {
-          url: window.location.href,
-          userAgent: navigator.userAgent,
-          userId: context.userId || null,
-          component: context.component || 'unknown',
-          action: context.action || 'unknown',
-          ...context
-        }
+        ...context
       };
 
       // In development, also log to console
       if (this.isDevelopment) {
-        console.error('CloudWatch Log:', logData);
+        console.error('CloudWatch Log:', { level, message: errorMessage, context: logContext });
       }
 
       // Send to CloudWatch via Firebase Function
-      await this.sendToCloudWatch(logData);
+      await this.sendToCloudWatch(errorMessage, level, logContext);
       
     } catch (loggingError) {
       // Fallback: log to console if CloudWatch fails
@@ -53,26 +52,26 @@ class Logger {
 
   /**
    * Send log data to CloudWatch via Firebase Function
-   * @param {Object} logData - The log data to send
+   * @param {string} message - The log message
+   * @param {string} level - Log level
+   * @param {Object} context - Log context
    */
-  async sendToCloudWatch(logData) {
+  async sendToCloudWatch(message, level, context) {
     try {
-      const response = await fetch('/api/log-error', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(logData)
+      const result = await logToCloudWatchFunction({
+        message,
+        level: level.toUpperCase(),
+        context,
+        streamName: level.toUpperCase() === 'ERROR' ? 'error-stream' : 'activity-stream'
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      if (!result.data.success) {
+        throw new Error(result.data.error || 'Unknown error');
       }
 
-      return await response.json();
+      return result.data;
     } catch (error) {
-      // If the API endpoint doesn't exist yet, we'll handle it gracefully
-      console.warn('CloudWatch API not available:', error.message);
+      console.warn('CloudWatch logging failed:', error.message);
       throw error;
     }
   }
@@ -83,7 +82,7 @@ class Logger {
    * @param {Object} context - Additional context
    */
   async logWarning(message, context = {}) {
-    return this.logError(message, context, 'warn');
+    return this.logError(message, context, 'WARN');
   }
 
   /**
@@ -92,7 +91,7 @@ class Logger {
    * @param {Object} context - Additional context
    */
   async logInfo(message, context = {}) {
-    return this.logError(message, context, 'info');
+    return this.logError(message, context, 'INFO');
   }
 
   /**

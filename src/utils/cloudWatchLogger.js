@@ -1,17 +1,13 @@
 /**
  * CloudWatch Logger for Vue.js Application
- * Sends errors directly to CloudWatch from the frontend
+ * Sends logs securely to CloudWatch via Firebase Functions
  */
 
-import AWS from 'aws-sdk';
-import { cloudWatchConfig } from '../config/cloudwatch';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 
-// Configure AWS CloudWatch Logs
-const logs = new AWS.CloudWatchLogs({
-  region: cloudWatchConfig.region,
-  accessKeyId: cloudWatchConfig.accessKeyId,
-  secretAccessKey: cloudWatchConfig.secretAccessKey
-});
+// Get Firebase Functions instance
+const functions = getFunctions();
+const logToCloudWatchFunction = httpsCallable(functions, 'logToCloudWatch');
 
 /**
  * Log any message to CloudWatch with specified level
@@ -22,20 +18,29 @@ const logs = new AWS.CloudWatchLogs({
  */
 async function logToCloudWatch(message, level = 'INFO', context = {}, streamName = null) {
   try {
-    const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
+    // Add browser context
+    const enrichedContext = {
+      ...context,
+      source: window.location.host,
+      url: window.location.href,
+      userAgent: navigator.userAgent,
+      timestamp: new Date().toISOString()
+    };
     
-    await logs.putLogEvents({
-      logGroupName: cloudWatchConfig.logGroupName,
-      logStreamName: streamName || cloudWatchConfig.logStreamName,
-      logEvents: [{
-        timestamp: Date.now(),
-        message: logMessage
-      }]
-    }).promise();
+    const result = await logToCloudWatchFunction({
+      message,
+      level,
+      context: enrichedContext,
+      streamName
+    });
     
-    console.log(`${level} logged to CloudWatch:`, message);
+    if (result.data.success) {
+      console.log(`${level} logged to CloudWatch:`, message);
+    } else {
+      throw new Error(result.data.error || 'Unknown error');
+    }
   } catch (err) {
-    console.log('Failed to log to CloudWatch:', err);
+    console.warn('Failed to log to CloudWatch:', err);
     // Fallback: log to console
     console.log(`${level} (fallback):`, message, context);
   }
@@ -47,7 +52,7 @@ async function logToCloudWatch(message, level = 'INFO', context = {}, streamName
  * @param {Object} context - Additional context information
  */
 async function logError(message, context = {}) {
-  return logToCloudWatch(message, 'ERROR', context);
+  return logToCloudWatch(message, 'ERROR', context, 'error-stream');
 }
 
 /**
@@ -61,19 +66,19 @@ export const cloudWatchLogger = {
 
   // Log level shortcuts
   async info(message, context = {}) {
-    return logToCloudWatch(message, 'INFO', context, cloudWatchConfig.activityStreamName);
+    return logToCloudWatch(message, 'INFO', context, 'activity-stream');
   },
 
   async warn(message, context = {}) {
-    return logToCloudWatch(message, 'WARN', context, cloudWatchConfig.activityStreamName);
+    return logToCloudWatch(message, 'WARN', context, 'activity-stream');
   },
 
   async debug(message, context = {}) {
-    return logToCloudWatch(message, 'DEBUG', context, cloudWatchConfig.activityStreamName);
+    return logToCloudWatch(message, 'DEBUG', context, 'activity-stream');
   },
 
   async error(message, context = {}) {
-    return logError(message, context);
+    return logToCloudWatch(message, 'ERROR', context, 'error-stream');
   },
 
   // Activity logging
@@ -81,27 +86,24 @@ export const cloudWatchLogger = {
     return logToCloudWatch(`Page viewed: ${pageName}`, 'INFO', {
       type: 'page_view',
       page: pageName,
-      url: window.location.href,
       ...context
-    }, cloudWatchConfig.activityStreamName);
+    }, 'activity-stream');
   },
 
   async logButtonClick(buttonName, context = {}) {
     return logToCloudWatch(`Button clicked: ${buttonName}`, 'INFO', {
       type: 'button_click',
       button: buttonName,
-      url: window.location.href,
       ...context
-    }, cloudWatchConfig.activityStreamName);
+    }, 'activity-stream');
   },
 
   async logUserAction(action, context = {}) {
     return logToCloudWatch(`User action: ${action}`, 'INFO', {
       type: 'user_action',
       action: action,
-      url: window.location.href,
       ...context
-    }, cloudWatchConfig.activityStreamName);
+    }, 'activity-stream');
   },
 
   async logNavigation(from, to, context = {}) {
@@ -110,61 +112,61 @@ export const cloudWatchLogger = {
       from: from,
       to: to,
       ...context
-    }, cloudWatchConfig.activityStreamName);
+    }, 'activity-stream');
   },
 
   // Database errors
   async databaseError(error, operation = 'unknown') {
-    return logError(`Database ${operation} failed: ${error.message}`, {
+    return logToCloudWatch(`Database ${operation} failed: ${error.message}`, 'ERROR', {
       type: 'database',
       operation,
       errorCode: error.code || 'unknown'
-    });
+    }, 'error-stream');
   },
 
   // API errors
   async apiError(error, endpoint = 'unknown') {
-    return logError(`API call to ${endpoint} failed: ${error.message}`, {
+    return logToCloudWatch(`API call to ${endpoint} failed: ${error.message}`, 'ERROR', {
       type: 'api',
       endpoint,
       status: error.status || 'unknown'
-    });
+    }, 'error-stream');
   },
 
   // Payment errors
   async paymentError(error, transactionId = null) {
-    return logError(`Payment processing failed: ${error.message}`, {
+    return logToCloudWatch(`Payment processing failed: ${error.message}`, 'ERROR', {
       type: 'payment',
       transactionId,
       errorCode: error.code || 'unknown'
-    });
+    }, 'error-stream');
   },
 
   // Authentication errors
   async authError(error, action = 'unknown') {
-    return logError(`Authentication ${action} failed: ${error.message}`, {
+    return logToCloudWatch(`Authentication ${action} failed: ${error.message}`, 'ERROR', {
       type: 'authentication',
       action,
       errorCode: error.code || 'unknown'
-    });
+    }, 'error-stream');
   },
 
   // Component errors
   async componentError(error, componentName, method = 'unknown') {
-    return logError(`Component ${componentName}.${method} error: ${error.message}`, {
+    return logToCloudWatch(`Component ${componentName}.${method} error: ${error.message}`, 'ERROR', {
       type: 'component',
       component: componentName,
       method
-    });
+    }, 'error-stream');
   },
 
   // Firebase errors
   async firebaseError(error, operation = 'unknown') {
-    return logError(`Firebase ${operation} failed: ${error.message}`, {
+    return logToCloudWatch(`Firebase ${operation} failed: ${error.message}`, 'ERROR', {
       type: 'firebase',
       operation,
       errorCode: error.code || 'unknown'
-    });
+    }, 'error-stream');
   }
 };
 
