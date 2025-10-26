@@ -6,12 +6,17 @@
 import AWS from 'aws-sdk';
 import { cloudWatchConfig } from '../config/cloudwatch';
 
-// Configure AWS CloudWatch Logs
-const logs = new AWS.CloudWatchLogs({
-  region: cloudWatchConfig.region,
-  accessKeyId: cloudWatchConfig.accessKeyId,
-  secretAccessKey: cloudWatchConfig.secretAccessKey
-});
+// Configure AWS CloudWatch Logs only if credentials are available
+let logs = null;
+if (cloudWatchConfig.isValid) {
+  logs = new AWS.CloudWatchLogs({
+    region: cloudWatchConfig.region,
+    accessKeyId: cloudWatchConfig.accessKeyId,
+    secretAccessKey: cloudWatchConfig.secretAccessKey
+  });
+} else {
+  console.warn('CloudWatch credentials not available. Logging will fall back to console only.');
+}
 
 /**
  * Log any message to CloudWatch with specified level
@@ -22,6 +27,12 @@ const logs = new AWS.CloudWatchLogs({
  */
 async function logToCloudWatch(message, level = 'INFO', context = {}, streamName = null) {
   try {
+    // If CloudWatch is not configured, fall back to console logging
+    if (!logs || !cloudWatchConfig.isValid) {
+      console.log(`${level} (console fallback):`, message, context);
+      return;
+    }
+
     const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
     
     await logs.putLogEvents({
