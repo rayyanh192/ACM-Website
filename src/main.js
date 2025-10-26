@@ -27,6 +27,7 @@ import TestCloudWatch from "@/pages/TestCloudWatch.vue";
 import {auth} from './firebase';
 import { getUserPerms } from "./helpers";
 import { serverLogger } from './utils/serverLogger';
+import { cloudWatchLogger } from './utils/cloudWatchLogger';
 import '@mdi/font/css/materialdesignicons.css';
 import '@/assets/override.css';
 
