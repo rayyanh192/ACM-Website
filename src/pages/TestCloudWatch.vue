@@ -52,6 +52,15 @@
               >
                 Test General Error
               </v-btn>
+
+              <v-btn 
+                color="success" 
+                class="ma-2" 
+                @click="runHealthCheck"
+                :loading="loading.health"
+              >
+                Health Check
+              </v-btn>
               
               <div v-if="lastResult" class="mt-4">
                 <v-alert 
@@ -59,6 +68,58 @@
                   :text="lastResult.message"
                 ></v-alert>
               </div>
+
+              <!-- Health Status Section -->
+              <v-divider class="my-4"></v-divider>
+              <h3>System Status</h3>
+              
+              <v-row class="mt-2">
+                <v-col cols="12" md="6">
+                  <v-card variant="outlined">
+                    <v-card-title class="text-h6">CloudWatch Status</v-card-title>
+                    <v-card-text>
+                      <v-chip 
+                        :color="cloudWatchStatus.enabled ? 'success' : 'error'"
+                        variant="flat"
+                        class="mb-2"
+                      >
+                        {{ cloudWatchStatus.enabled ? 'Enabled' : 'Disabled' }}
+                      </v-chip>
+                      <p class="text-body-2 mt-2">{{ cloudWatchStatus.message }}</p>
+                    </v-card-text>
+                  </v-card>
+                </v-col>
+                
+                <v-col cols="12" md="6">
+                  <v-card variant="outlined">
+                    <v-card-title class="text-h6">Error Queue</v-card-title>
+                    <v-card-text>
+                      <p>Queued logs: {{ queuedLogsCount }}</p>
+                      <p>Stored errors: {{ storedErrorsCount }}</p>
+                      <v-btn 
+                        size="small" 
+                        variant="outlined" 
+                        @click="clearStoredData"
+                        class="mt-2"
+                      >
+                        Clear Stored Data
+                      </v-btn>
+                    </v-card-text>
+                  </v-card>
+                </v-col>
+              </v-row>
+
+              <!-- Debug Information -->
+              <v-expansion-panels class="mt-4">
+                <v-expansion-panel>
+                  <v-expansion-panel-title>Debug Information</v-expansion-panel-title>
+                  <v-expansion-panel-text>
+                    <v-code class="debug-info">
+                      {{ debugInfo }}
+                    </v-code>
+                  </v-expansion-panel-text>
+                </v-expansion-panel>
+              </v-expansion-panels>
             </v-card-text>
           </v-card>
         </v-col>
@@ -80,10 +141,22 @@ export default {
         database: false,
         api: false,
         firebase: false,
-        general: false
+        general: false,
+        health: false
       },
-      lastResult: null
+      lastResult: null,
+      cloudWatchStatus: {
+        enabled: false,
+        message: 'Checking...'
+      },
+      queuedLogsCount: 0,
+      storedErrorsCount: 0,
+      debugInfo: ''
     };
+  },
+
+  async mounted() {
+    await this.updateStatus();
   },
   
   methods: {
@@ -224,6 +297,68 @@ export default {
       } finally {
         this.loading.general = false;
       }
+    },
+
+    async runHealthCheck() {
+      this.loading.health = true;
+      try {
+        const healthResult = await cloudWatchLogger.healthCheck();
+        this.lastResult = {
+          success: healthResult.status === 'healthy',
+          message: `Health check: ${healthResult.status}${healthResult.reason ? ` - ${healthResult.reason}` : ''}${healthResult.error ? ` - ${healthResult.error}` : ''}`
+        };
+        await this.updateStatus();
+      } catch (error) {
+        this.lastResult = {
+          success: false,
+          message: `Health check failed: ${error.message}`
+        };
+      } finally {
+        this.loading.health = false;
+      }
+    },
+
+    async updateStatus() {
+      try {
+        // Update CloudWatch status
+        this.cloudWatchStatus.enabled = cloudWatchLogger.isCloudWatchEnabled();
+        this.cloudWatchStatus.message = this.cloudWatchStatus.enabled 
+          ? 'CloudWatch logging is active and configured'
+          : 'CloudWatch logging is disabled - check configuration';
+
+        // Update queue counts
+        this.queuedLogsCount = cloudWatchLogger.getQueuedLogs().length;
+        this.storedErrorsCount = cloudWatchLogger.getStoredErrors().length;
+
+        // Update debug info
+        this.debugInfo = JSON.stringify({
+          cloudWatchEnabled: this.cloudWatchStatus.enabled,
+          queuedLogs: this.queuedLogsCount,
+          storedErrors: this.storedErrorsCount,
+          userAgent: navigator.userAgent,
+          url: window.location.href,
+          timestamp: new Date().toISOString()
+        }, null, 2);
+      } catch (error) {
+        console.error('Failed to update status:', error);
+      }
+    },
+
+    clearStoredData() {
+      try {
+        cloudWatchLogger.clearQueue();
+        cloudWatchLogger.clearStoredErrors();
+        this.updateStatus();
+        this.lastResult = {
+          success: true,
+          message: 'Stored data cleared successfully'
+        };
+      } catch (error) {
+        this.lastResult = {
+          success: false,
+          message: `Failed to clear stored data: ${error.message}`
+        };
+      }
     }
   }
 };
@@ -232,5 +367,15 @@ export default {
 <style scoped>
 .test-cloudwatch {
   padding: 20px 0;
+}
+
+.debug-info {
+  white-space: pre-wrap;
+  font-size: 0.875rem;
+  background-color: rgba(0, 0, 0, 0.05);
+  padding: 12px;
+  border-radius: 4px;
+  max-height: 300px;
+  overflow-y: auto;
 }
 </style>
