@@ -1,0 +1,18 @@
+{
+  "payment_service": {
+    "timeout_ms": 30000,
+    "retry_attempts": 3,
+    "retry_delay_ms": 1000,
+    "connection_timeout_ms": 10000
+  },
+  "database": {
+    "connection_timeout_ms": 30000,
+    "pool_timeout_ms": 60000,
+    "max_connections": 20,
+    "min_connections": 5
+  },
+  "api": {
+    "request_timeout_ms": 25000,
+    "keepalive_timeout_ms": 5000
+  }
+}
