@@ -24,20 +24,34 @@ exports.addRole = functions.https.onCall(async (data, context) => {
     if (!uid) {
         return {message: "Please pass a UID to the function"};
     }
+    if (!role) {
+        return {message: "Please pass a role to add"};
+    }
 
-    const currentClaims = (await admin.auth().getUser(uid)).customClaims || {};
-    const roles = currentClaims?.roles || [];
-    roles.push(role);
-    currentClaims.roles = roles;
+    try {
+        const currentClaims = (await admin.auth().getUser(uid)).customClaims || {};
+        const roles = currentClaims?.roles || [];
+        
+        // Check if role already exists
+        if (roles.includes(role)) {
+            return {message: `Role '${role}' already exists for user`};
+        }
+        
+        roles.push(role);
+        currentClaims.roles = roles;
 
-    await admin.auth().setCustomUserClaims(uid, currentClaims);
-    const userRecord = await admin.auth().getUser(uid);
-    return {
-        uid: userRecord.uid,
-        email: userRecord.email,
-        displayName: userRecord.displayName,
-        claims: userRecord.customClaims,
-    };
+        await admin.auth().setCustomUserClaims(uid, currentClaims);
+        const userRecord = await admin.auth().getUser(uid);
+        return {
+            uid: userRecord.uid,
+            email: userRecord.email,
+            displayName: userRecord.displayName,
+            claims: userRecord.customClaims,
+        };
+    } catch (error) {
+        console.error("Error adding role:", error);
+        return {message: "Failed to add role", error: error.message};
+    }
 });
 
 exports.removeRole = functions.https.onCall(async (data, context) => {
@@ -50,21 +64,35 @@ exports.removeRole = functions.https.onCall(async (data, context) => {
     if (!uid) {
         return {message: "Please pass a UID to the function"};
     }
-    const currentClaims = (await admin.auth().getUser(uid)).customClaims;
+    if (!role) {
+        return {message: "Please pass a role to remove"};
+    }
+    
+    try {
+        const currentClaims = (await admin.auth().getUser(uid)).customClaims;
+        const roles = currentClaims?.roles ?? [];
+        
+        const roleIndex = roles.indexOf(role);
+        if (roleIndex === -1) {
+            return {message: `Role '${role}' not found for user`};
+        }
+        
+        console.log("Removing role at INDEX", roleIndex);
+        roles.splice(roleIndex, 1);
+        currentClaims.roles = roles;
 
-    const roles = currentClaims?.roles ?? [];
-    console.log("INDEX", roles.indexOf(role));
-    roles.splice(roles.indexOf(role), 1);
-    currentClaims.roles = roles;
-
-    await admin.auth().setCustomUserClaims(uid, currentClaims);
-    const userRecord = await admin.auth().getUser(uid);
-    return {
-        uid: userRecord.uid,
-        email: userRecord.email,
-        displayName: userRecord.displayName,
-        claims: userRecord.customClaims,
-    };
+        await admin.auth().setCustomUserClaims(uid, currentClaims);
+        const userRecord = await admin.auth().getUser(uid);
+        return {
+            uid: userRecord.uid,
+            email: userRecord.email,
+            displayName: userRecord.displayName,
+            claims: userRecord.customClaims,
+        };
+    } catch (error) {
+        console.error("Error removing role:", error);
+        return {message: "Failed to remove role", error: error.message};
+    }
 });
 
 exports.searchUsers = functions.https.onCall((data, context) => {
@@ -93,7 +121,7 @@ return {uid: uid};
     });
 });
 
-exports.addAdmin = functions.https.onCall((data, context) => {
+exports.addAdmin = functions.https.onCall(async (data, context) => {
     const uid = data.uid;
     const isAdmin = context.auth.token.admin || false;
     if (!isAdmin) {
@@ -102,11 +130,23 @@ exports.addAdmin = functions.https.onCall((data, context) => {
     if (!uid) {
         return {message: "Please pass a UID to the function"};
     }
-    return admin.auth().setCustomUserClaims(uid, {admin: true}).then(() => {
-        return {message: "User added as admin"};
-    });
+    
+    try {
+        await admin.auth().setCustomUserClaims(uid, {admin: true});
+        const userRecord = await admin.auth().getUser(uid);
+        return {
+            message: "User added as admin",
+            uid: userRecord.uid,
+            email: userRecord.email,
+            displayName: userRecord.displayName,
+            claims: userRecord.customClaims,
+        };
+    } catch (error) {
+        console.error("Error adding admin:", error);
+        return {message: "Failed to add admin privileges", error: error.message};
+    }
 });
-exports.removeAdmin = functions.https.onCall( (data, context) => {
+exports.removeAdmin = functions.https.onCall( async (data, context) => {
     const uid = data.uid;
     const isAdmin = context.auth.token.admin || false;
     if (!isAdmin) {
@@ -115,9 +155,21 @@ exports.removeAdmin = functions.https.onCall( (data, context) => {
     if (!uid) {
         return {message: "Please pass a UID to the function"};
     }
-    return admin.auth().setCustomUserClaims(uid, {admin: true}).then(() => {
-        return {message: "User removed as admin"};
-    });
+    
+    try {
+        await admin.auth().setCustomUserClaims(uid, {admin: false});
+        const userRecord = await admin.auth().getUser(uid);
+        return {
+            message: "User removed as admin",
+            uid: userRecord.uid,
+            email: userRecord.email,
+            displayName: userRecord.displayName,
+            claims: userRecord.customClaims,
+        };
+    } catch (error) {
+        console.error("Error removing admin:", error);
+        return {message: "Failed to remove admin privileges", error: error.message};
+    }
 });
 exports.getEventAttendance = functions.https.onCall( async (data, context) => {
     const eventId = data.id;
@@ -290,7 +342,7 @@ function formatDateTime(event) {
     // If a start date is provided but an end date isn't, return the start date:
     // Format: Oct 1st 5:45 pm
     if (event.startDate && !event.endDate) {
-      return moment(event.startDate.toDate()).tz("America/Los Angeles").format("MMM Do YYYY, h:mm a");
+      return moment(event.startDate.toDate()).tz("America/Los_Angeles").format("MMM Do YYYY, h:mm a");
     }
     // Format the start and end as dates. Ex: Oct 1st
     const startDate = moment(event.startDate.toDate()).tz("America/Los_Angeles").format("MMM Do, YYYY,");

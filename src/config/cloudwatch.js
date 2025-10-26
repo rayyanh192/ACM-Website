@@ -6,3 +6,25 @@ export const cloudWatchConfig = {
   logStreamName: process.env.VUE_APP_LOG_STREAM_NAME || 'error-stream',
   activityStreamName: process.env.VUE_APP_ACTIVITY_STREAM_NAME || 'activity-stream'
 };
+
+// Validate required configuration
+export const validateCloudWatchConfig = () => {
+  const missingVars = [];
+  
+  if (!cloudWatchConfig.accessKeyId) {
+    missingVars.push('VUE_APP_AWS_ACCESS_KEY_ID');
+  }
+  
+  if (!cloudWatchConfig.secretAccessKey) {
+    missingVars.push('VUE_APP_AWS_SECRET_ACCESS_KEY');
+  }
+  
+  if (missingVars.length > 0) {
+    console.warn('CloudWatch logging disabled - missing environment variables:', missingVars);
+    return false;
+  }
+  
+  return true;
+};
+
+export const isCloudWatchEnabled = validateCloudWatchConfig();
