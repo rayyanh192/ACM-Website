@@ -1,14 +1,24 @@
-// Simple logger that sends button clicks to server (which nginx will log)
+// Enhanced logger that creates multiple trackable requests
 export const serverLogger = {
   async logButtonClick(buttonName) {
     try {
-      // Send request to a fake endpoint - nginx will log this in access.log
-      await fetch(`/api/log-click?button=${encodeURIComponent(buttonName)}&timestamp=${Date.now()}`, {
-        method: 'GET'
-      });
+      const timestamp = Date.now();
+      const sessionId = Math.random().toString(36).substring(7);
+      
+      // Create multiple requests to ensure logging
+      const requests = [
+        fetch(`/api/log-click?button=${encodeURIComponent(buttonName)}&timestamp=${timestamp}&session=${sessionId}`, { method: 'GET' }),
+        fetch(`/api/button-track?name=${encodeURIComponent(buttonName)}&time=${timestamp}`, { method: 'GET' }),
+        fetch(`/api/user-action?action=click&element=${encodeURIComponent(buttonName)}&ts=${timestamp}`, { method: 'GET' })
+      ];
+      
+      // Send all requests (they'll all create 404s in nginx logs)
+      await Promise.allSettled(requests);
+      
+      console.log(`Button click logged: ${buttonName} (${sessionId})`);
+      
     } catch (error) {
-      // This will create a 404 error in nginx error.log - perfect for testing!
-      console.log('Button click logged (404 expected):', buttonName);
+      console.log('Logging failed:', error);
     }
   }
 };
