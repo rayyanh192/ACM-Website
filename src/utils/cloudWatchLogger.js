@@ -6,12 +6,36 @@
 import AWS from 'aws-sdk';
 import { cloudWatchConfig } from '../config/cloudwatch';
 
-// Configure AWS CloudWatch Logs
-const logs = new AWS.CloudWatchLogs({
-  region: cloudWatchConfig.region,
-  accessKeyId: cloudWatchConfig.accessKeyId,
-  secretAccessKey: cloudWatchConfig.secretAccessKey
-});
+// Validate configuration on module load
+const validateConfig = () => {
+  const missing = [];
+  if (!cloudWatchConfig.accessKeyId) missing.push('VUE_APP_AWS_ACCESS_KEY_ID');
+  if (!cloudWatchConfig.secretAccessKey) missing.push('VUE_APP_AWS_SECRET_ACCESS_KEY');
+  if (!cloudWatchConfig.region) missing.push('VUE_APP_AWS_REGION');
+  
+  if (missing.length > 0) {
+    console.warn('CloudWatch logging disabled - missing environment variables:', missing.join(', '));
+    console.warn('See .env.example for configuration instructions');
+    return false;
+  }
+  return true;
+};
+
+const isConfigValid = validateConfig();
+
+// Configure AWS CloudWatch Logs only if config is valid
+let logs = null;
+if (isConfigValid) {
+  try {
+    logs = new AWS.CloudWatchLogs({
+      region: cloudWatchConfig.region,
+      accessKeyId: cloudWatchConfig.accessKeyId,
+      secretAccessKey: cloudWatchConfig.secretAccessKey
+    });
+  } catch (error) {
+    console.error('Failed to initialize CloudWatch client:', error);
+  }
+}
 
 /**
  * Log any message to CloudWatch with specified level
@@ -21,6 +45,12 @@ const logs = new AWS.CloudWatchLogs({
  * @param {string} streamName - Optional custom stream name
  */
 async function logToCloudWatch(message, level = 'INFO', context = {}, streamName = null) {
+  // If CloudWatch is not configured, fall back to console logging
+  if (!isConfigValid || !logs) {
+    console.log(`${level} (CloudWatch unavailable):`, message, context);
+    return;
+  }
+
   try {
     const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
     
@@ -35,9 +65,14 @@ async function logToCloudWatch(message, level = 'INFO', context = {}, streamName
     
     console.log(`${level} logged to CloudWatch:`, message);
   } catch (err) {
-    console.log('Failed to log to CloudWatch:', err);
-    // Fallback: log to console
-    console.log(`${level} (fallback):`, message, context);
+    console.warn('Failed to log to CloudWatch:', err.message);
+    // Fallback: log to console with additional context
+    console.log(`${level} (CloudWatch failed):`, message, context);
+    
+    // If it's a credentials error, provide helpful guidance
+    if (err.code === 'InvalidUserID.NotFound' || err.code === 'SignatureDoesNotMatch') {
+      console.warn('CloudWatch credentials may be invalid. Check your AWS configuration.');
+    }
   }
 }
 

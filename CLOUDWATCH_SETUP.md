@@ -18,15 +18,26 @@ aws configure list
 
 ## Step 2: Set Environment Variables
 
+### Quick Setup
+1. Copy the environment template: `cp .env.example .env`
+2. Edit `.env` and fill in your AWS credentials
+3. Restart your development server: `npm run dev`
+
 ### Option A: Local Development (.env file)
-Create a `.env` file in your project root:
+Use the provided template file:
+```bash
+cp .env.example .env
+# Then edit .env with your actual values
+```
+
+Required variables in your `.env` file:
 ```bash
 VUE_APP_AWS_ACCESS_KEY_ID=your_access_key_here
 VUE_APP_AWS_SECRET_ACCESS_KEY=your_secret_key_here
 VUE_APP_AWS_REGION=us-east-1
-VUE_APP_CLOUDWATCH_LOG_GROUP=/aws/lambda/checkout-api
-VUE_APP_CLOUDWATCH_LOG_STREAM=website-errors
-VUE_APP_CLOUDWATCH_ACTIVITY_STREAM=website-activity
+VUE_APP_LOG_GROUP_NAME=acm-website-logs
+VUE_APP_LOG_STREAM_NAME=error-stream
+VUE_APP_ACTIVITY_STREAM_NAME=activity-stream
 ```
 
 ### Option B: EC2 Server Environment
@@ -137,20 +148,33 @@ The integration will automatically log:
 
 ### Common Issues
 
-1. **"Failed to log to CloudWatch" errors**
-   - Check AWS credentials are correct
-   - Verify IAM permissions
-   - Ensure log group exists
+1. **"CloudWatch logging disabled" warnings**
+   - Check that all required environment variables are set
+   - Copy `.env.example` to `.env` and fill in your values
+   - Verify variable names start with `VUE_APP_`
+   - Restart your development server after changes
 
-2. **Environment variables not loading**
+2. **"Failed to log to CloudWatch" errors**
+   - Check AWS credentials are correct
+   - Verify IAM permissions (see Step 3)
+   - Ensure log group exists or will be auto-created
+   - Check AWS region is correct
+
+3. **Environment variables not loading**
    - Restart your development server
    - Check variable names start with `VUE_APP_`
-   - Verify .env file is in project root
+   - Verify .env file is in project root (not in src/ folder)
+   - Ensure .env file is not committed to git (.gitignore should exclude it)
 
-3. **CORS errors**
+4. **CORS errors**
    - CloudWatch API calls are made from browser
    - Ensure your AWS credentials allow browser access
-   - Consider using Firebase Functions as proxy
+   - Consider using Firebase Functions as proxy for production
+
+5. **"CloudWatch credentials may be invalid" warnings**
+   - Double-check your AWS Access Key ID and Secret Access Key
+   - Ensure the IAM user has the required CloudWatch permissions
+   - Try regenerating your AWS credentials if they're old
 
 ### Debug Mode
 Set `NODE_ENV=development` to see detailed console logs.
