@@ -15,56 +15,94 @@ const {tz} = require("moment-timezone");
 admin.initializeApp();
 
 exports.addRole = functions.https.onCall(async (data, context) => {
-    const isAdmin = context.auth.token.admin || false;
-    if (!isAdmin) {
-        return {message: "You must be an admin to add another admin user"};
-    }
-    const uid = data.uid;
-    const role = data.role;
-    if (!uid) {
-        return {message: "Please pass a UID to the function"};
-    }
+    try {
+        const isAdmin = context.auth.token.admin || false;
+        if (!isAdmin) {
+            return {error: "You must be an admin to add another admin user", code: 403};
+        }
+        
+        const uid = data.uid;
+        const role = data.role;
+        
+        if (!uid || typeof uid !== 'string') {
+            return {error: "Please pass a valid UID to the function", code: 400};
+        }
+        
+        if (!role || typeof role !== 'string') {
+            return {error: "Please pass a valid role to the function", code: 400};
+        }
 
-    const currentClaims = (await admin.auth().getUser(uid)).customClaims || {};
-    const roles = currentClaims?.roles || [];
-    roles.push(role);
-    currentClaims.roles = roles;
+        const currentClaims = (await admin.auth().getUser(uid)).customClaims || {};
+        const roles = currentClaims?.roles || [];
+        
+        // Prevent duplicate roles
+        if (!roles.includes(role)) {
+            roles.push(role);
+        }
+        
+        currentClaims.roles = roles;
 
-    await admin.auth().setCustomUserClaims(uid, currentClaims);
-    const userRecord = await admin.auth().getUser(uid);
-    return {
-        uid: userRecord.uid,
-        email: userRecord.email,
-        displayName: userRecord.displayName,
-        claims: userRecord.customClaims,
-    };
+        await admin.auth().setCustomUserClaims(uid, currentClaims);
+        const userRecord = await admin.auth().getUser(uid);
+        return {
+            success: true,
+            user: {
+                uid: userRecord.uid,
+                email: userRecord.email,
+                displayName: userRecord.displayName,
+                claims: userRecord.customClaims,
+            }
+        };
+    } catch (error) {
+        console.error('Error in addRole:', error);
+        return {error: "Internal server error", code: 500, details: error.message};
+    }
 });
 
 exports.removeRole = functions.https.onCall(async (data, context) => {
-    const isAdmin = context.auth.token.admin || false;
-    if (!isAdmin) {
-        return {message: "You must be an admin to add another admin user"};
-    }
-    const uid = data.uid;
-    const role = data.role;
-    if (!uid) {
-        return {message: "Please pass a UID to the function"};
-    }
-    const currentClaims = (await admin.auth().getUser(uid)).customClaims;
+    try {
+        const isAdmin = context.auth.token.admin || false;
+        if (!isAdmin) {
+            return {error: "You must be an admin to remove roles", code: 403};
+        }
+        
+        const uid = data.uid;
+        const role = data.role;
+        
+        if (!uid || typeof uid !== 'string') {
+            return {error: "Please pass a valid UID to the function", code: 400};
+        }
+        
+        if (!role || typeof role !== 'string') {
+            return {error: "Please pass a valid role to the function", code: 400};
+        }
+        
+        const currentClaims = (await admin.auth().getUser(uid)).customClaims;
+        const roles = currentClaims?.roles ?? [];
+        
+        const roleIndex = roles.indexOf(role);
+        if (roleIndex === -1) {
+            return {error: "Role not found for this user", code: 404};
+        }
+        
+        roles.splice(roleIndex, 1);
+        currentClaims.roles = roles;
 
-    const roles = currentClaims?.roles ?? [];
-    console.log("INDEX", roles.indexOf(role));
-    roles.splice(roles.indexOf(role), 1);
-    currentClaims.roles = roles;
-
-    await admin.auth().setCustomUserClaims(uid, currentClaims);
-    const userRecord = await admin.auth().getUser(uid);
-    return {
-        uid: userRecord.uid,
-        email: userRecord.email,
-        displayName: userRecord.displayName,
-        claims: userRecord.customClaims,
-    };
+        await admin.auth().setCustomUserClaims(uid, currentClaims);
+        const userRecord = await admin.auth().getUser(uid);
+        return {
+            success: true,
+            user: {
+                uid: userRecord.uid,
+                email: userRecord.email,
+                displayName: userRecord.displayName,
+                claims: userRecord.customClaims,
+            }
+        };
+    } catch (error) {
+        console.error('Error in removeRole:', error);
+        return {error: "Internal server error", code: 500, details: error.message};
+    }
 });
 
 exports.searchUsers = functions.https.onCall((data, context) => {
@@ -93,31 +131,46 @@ return {uid: uid};
     });
 });
 
-exports.addAdmin = functions.https.onCall((data, context) => {
-    const uid = data.uid;
-    const isAdmin = context.auth.token.admin || false;
-    if (!isAdmin) {
-        return {message: "You must be an admin to add another admin user"};
+exports.addAdmin = functions.https.onCall(async (data, context) => {
+    try {
+        const uid = data.uid;
+        const isAdmin = context.auth.token.admin || false;
+        
+        if (!isAdmin) {
+            return {error: "You must be an admin to add another admin user", code: 403};
+        }
+        
+        if (!uid || typeof uid !== 'string') {
+            return {error: "Please pass a valid UID to the function", code: 400};
+        }
+        
+        await admin.auth().setCustomUserClaims(uid, {admin: true});
+        return {success: true, message: "User added as admin"};
+    } catch (error) {
+        console.error('Error in addAdmin:', error);
+        return {error: "Internal server error", code: 500, details: error.message};
     }
-    if (!uid) {
-        return {message: "Please pass a UID to the function"};
-    }
-    return admin.auth().setCustomUserClaims(uid, {admin: true}).then(() => {
-        return {message: "User added as admin"};
-    });
 });
-exports.removeAdmin = functions.https.onCall( (data, context) => {
-    const uid = data.uid;
-    const isAdmin = context.auth.token.admin || false;
-    if (!isAdmin) {
-        return {message: "You must be an admin to remove another admin user"};
+
+exports.removeAdmin = functions.https.onCall(async (data, context) => {
+    try {
+        const uid = data.uid;
+        const isAdmin = context.auth.token.admin || false;
+        
+        if (!isAdmin) {
+            return {error: "You must be an admin to remove another admin user", code: 403};
+        }
+        
+        if (!uid || typeof uid !== 'string') {
+            return {error: "Please pass a valid UID to the function", code: 400};
+        }
+        
+        await admin.auth().setCustomUserClaims(uid, {admin: false});
+        return {success: true, message: "User removed as admin"};
+    } catch (error) {
+        console.error('Error in removeAdmin:', error);
+        return {error: "Internal server error", code: 500, details: error.message};
     }
-    if (!uid) {
-        return {message: "Please pass a UID to the function"};
-    }
-    return admin.auth().setCustomUserClaims(uid, {admin: true}).then(() => {
-        return {message: "User removed as admin"};
-    });
 });
 exports.getEventAttendance = functions.https.onCall( async (data, context) => {
     const eventId = data.id;
@@ -267,7 +320,7 @@ exports.sendWelcomeEmail = functions.runWith({secrets: ["mailAppPassword"]})
 
     const templatePath = path.join(__dirname, 'welcome_email.html');
     let html = fs.readFileSync(templatePath, 'utf8');
-    html = html.replace('{{firstName}},', `${firstName},` || '');
+    html = html.replace('{{firstName}}', firstName || '');
 
     const mailOptions = {
         from: 'SCUACM <santaclara.acm@gmail.com>',
