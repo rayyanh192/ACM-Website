@@ -1,12 +1,15 @@
 <template>
   <div class="test-cloudwatch">
     <v-container>
+      <!-- System Health Monitor -->
+      <SystemHealthMonitor />
+      
       <v-row justify="center">
         <v-col cols="12" md="8">
           <v-card>
             <v-card-title>CloudWatch Integration Test</v-card-title>
             <v-card-text>
-              <p>This page tests the CloudWatch logging integration. Click the buttons below to trigger different types of errors.</p>
+              <p>This page tests the CloudWatch logging integration and monitors system health. Click the buttons below to trigger different types of errors and test the enhanced error handling.</p>
               
               <v-btn 
                 color="error" 
@@ -69,9 +72,17 @@
 
 <script>
 import { cloudWatchLogger } from '@/utils/cloudWatchLogger';
+import { paymentHandler } from '@/utils/paymentHandler';
+import { databaseConfig } from '@/config/databaseConfig';
+import { connectionPool } from '@/utils/connectionPool';
+import SystemHealthMonitor from '@/components/SystemHealthMonitor.vue';
 
 export default {
   name: 'TestCloudWatch',
+  
+  components: {
+    SystemHealthMonitor
+  },
   
   data() {
     return {
@@ -96,18 +107,33 @@ export default {
           testType: 'payment_error'
         });
         
-        await cloudWatchLogger.paymentError(
-          new Error('Payment processing failed - insufficient funds'),
-          'txn_123456789'
-        );
-        this.lastResult = {
-          success: true,
-          message: 'Payment error logged to CloudWatch successfully!'
+        // Test the new payment handler with realistic payment data
+        const paymentData = {
+          amount: 99.99,
+          currency: 'USD',
+          transactionId: `test_${Date.now()}`,
+          paymentMethod: 'credit_card'
         };
+
+        try {
+          const result = await paymentHandler.processPayment(paymentData);
+          this.lastResult = {
+            success: true,
+            message: `Payment processed successfully! Transaction ID: ${result.transactionId}`
+          };
+        } catch (paymentError) {
+          // This will trigger the enhanced error logging
+          await cloudWatchLogger.paymentError(paymentError, paymentData.transactionId);
+          this.lastResult = {
+            success: false,
+            message: `Payment failed: ${paymentError.message}`
+          };
+        }
+        
       } catch (error) {
         this.lastResult = {
           success: false,
-          message: `Failed to log payment error: ${error.message}`
+          message: `Failed to test payment: ${error.message}`
         };
       } finally {
         this.loading.payment = false;
@@ -123,18 +149,44 @@ export default {
           testType: 'database_error'
         });
         
-        await cloudWatchLogger.databaseError(
-          new Error('Database connection timeout'),
-          'user_query'
-        );
-        this.lastResult = {
-          success: true,
-          message: 'Database error logged to CloudWatch successfully!'
-        };
+        // Test database connection with the new database config
+        try {
+          const connection = await databaseConfig.getConnection('test_query');
+          
+          // Simulate a database operation that might fail
+          await databaseConfig.executeQuery(async (db) => {
+            // Simulate connection pool exhaustion by creating multiple concurrent queries
+            const promises = [];
+            for (let i = 0; i < 25; i++) { // Exceed max connections
+              promises.push(databaseConfig.executeQuery(async () => {
+                await new Promise(resolve => setTimeout(resolve, 100));
+                return { result: `query_${i}` };
+              }, `concurrent_query_${i}`));
+            }
+            
+            await Promise.all(promises);
+            return { status: 'completed' };
+          }, 'test_database_operation');
+          
+          connection.release();
+          
+          this.lastResult = {
+            success: true,
+            message: 'Database operations completed successfully!'
+          };
+        } catch (dbError) {
+          // This will trigger the enhanced database error logging
+          await cloudWatchLogger.databaseError(dbError, 'test_operation');
+          this.lastResult = {
+            success: false,
+            message: `Database error: ${dbError.message}`
+          };
+        }
+        
       } catch (error) {
         this.lastResult = {
           success: false,
-          message: `Failed to log database error: ${error.message}`
+          message: `Failed to test database: ${error.message}`
         };
       } finally {
         this.loading.database = false;
@@ -150,18 +202,40 @@ export default {
           testType: 'api_error'
         });
         
-        await cloudWatchLogger.apiError(
-          new Error('External API returned 500 error'),
-          '/api/external-service'
-        );
-        this.lastResult = {
-          success: true,
-          message: 'API error logged to CloudWatch successfully!'
-        };
+        // Test connection pool with multiple concurrent requests
+        try {
+          const requests = [];
+          for (let i = 0; i < 15; i++) {
+            requests.push(
+              connectionPool.makeRequest(`https://httpbin.org/delay/${Math.random() * 2}`, {
+                method: 'GET',
+                headers: {
+                  'Content-Type': 'application/json'
+                }
+              })
+            );
+          }
+          
+          const results = await Promise.allSettled(requests);
+          const successful = results.filter(r => r.status === 'fulfilled').length;
+          const failed = results.filter(r => r.status === 'rejected').length;
+          
+          this.lastResult = {
+            success: true,
+            message: `API test completed: ${successful} successful, ${failed} failed requests`
+          };
+        } catch (apiError) {
+          await cloudWatchLogger.apiError(apiError, '/test-endpoint');
+          this.lastResult = {
+            success: false,
+            message: `API error: ${apiError.message}`
+          };
+        }
+        
       } catch (error) {
         this.lastResult = {
           success: false,
-          message: `Failed to log API error: ${error.message}`
+          message: `Failed to test API: ${error.message}`
         };
       } finally {
         this.loading.api = false;
