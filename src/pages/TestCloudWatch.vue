@@ -52,12 +52,39 @@
               >
                 Test General Error
               </v-btn>
+
+              <v-btn 
+                color="success" 
+                class="ma-2" 
+                @click="testDatabaseConnection"
+                :loading="loading.dbConnection"
+              >
+                Test Database Connection
+              </v-btn>
+
+              <v-btn 
+                color="info" 
+                class="ma-2" 
+                @click="checkCloudWatchStatus"
+                :loading="loading.cwStatus"
+              >
+                Check CloudWatch Status
+              </v-btn>
               
               <div v-if="lastResult" class="mt-4">
                 <v-alert 
                   :type="lastResult.success ? 'success' : 'error'"
                   :text="lastResult.message"
                 ></v-alert>
+              </div>
+
+              <div v-if="statusInfo" class="mt-4">
+                <v-card>
+                  <v-card-title>System Status</v-card-title>
+                  <v-card-text>
+                    <pre>{{ statusInfo }}</pre>
+                  </v-card-text>
+                </v-card>
               </div>
             </v-card-text>
           </v-card>
@@ -80,9 +107,12 @@ export default {
         database: false,
         api: false,
         firebase: false,
-        general: false
+        general: false,
+        dbConnection: false,
+        cwStatus: false
       },
-      lastResult: null
+      lastResult: null,
+      statusInfo: null
     };
   },
   
@@ -223,6 +253,94 @@ export default {
         };
       } finally {
         this.loading.general = false;
+      }
+    },
+
+    async testDatabaseConnection() {
+      this.loading.dbConnection = true;
+      try {
+        // Log button click
+        await cloudWatchLogger.logButtonClick('Test Database Connection', {
+          component: 'TestCloudWatch',
+          testType: 'database_connection'
+        });
+
+        // Import and test database connection
+        const { checkDatabaseConnection, getDatabaseConnectionStatus } = await import('@/firebase');
+        const result = await checkDatabaseConnection();
+        const status = getDatabaseConnectionStatus();
+
+        if (result.connected) {
+          this.lastResult = {
+            success: true,
+            message: 'Database connection test successful!'
+          };
+          this.statusInfo = JSON.stringify({
+            connectionTest: result,
+            connectionStatus: status,
+            timestamp: new Date().toISOString()
+          }, null, 2);
+        } else {
+          this.lastResult = {
+            success: false,
+            message: `Database connection failed: ${result.error?.message}`
+          };
+          this.statusInfo = JSON.stringify({
+            connectionTest: result,
+            connectionStatus: status,
+            error: result.error,
+            timestamp: new Date().toISOString()
+          }, null, 2);
+        }
+      } catch (error) {
+        this.lastResult = {
+          success: false,
+          message: `Database connection test failed: ${error.message}`
+        };
+        this.statusInfo = JSON.stringify({
+          error: error.message,
+          timestamp: new Date().toISOString()
+        }, null, 2);
+      } finally {
+        this.loading.dbConnection = false;
+      }
+    },
+
+    async checkCloudWatchStatus() {
+      this.loading.cwStatus = true;
+      try {
+        // Log button click
+        await cloudWatchLogger.logButtonClick('Check CloudWatch Status', {
+          component: 'TestCloudWatch',
+          testType: 'cloudwatch_status'
+        });
+
+        const status = cloudWatchLogger.getStatus();
+        const connectionTest = await cloudWatchLogger.testConnection();
+
+        this.lastResult = {
+          success: status.enabled && connectionTest.success,
+          message: status.enabled 
+            ? (connectionTest.success ? 'CloudWatch is working properly!' : `CloudWatch error: ${connectionTest.error}`)
+            : 'CloudWatch is not configured'
+        };
+
+        this.statusInfo = JSON.stringify({
+          cloudWatchStatus: status,
+          connectionTest: connectionTest,
+          timestamp: new Date().toISOString()
+        }, null, 2);
+      } catch (error) {
+        this.lastResult = {
+          success: false,
+          message: `CloudWatch status check failed: ${error.message}`
+        };
+        this.statusInfo = JSON.stringify({
+          error: error.message,
+          timestamp: new Date().toISOString()
+        }, null, 2);
+      } finally {
+        this.loading.cwStatus = false;
       }
     }
   }

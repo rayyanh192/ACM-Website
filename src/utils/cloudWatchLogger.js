@@ -4,14 +4,17 @@
  */
 
 import AWS from 'aws-sdk';
-import { cloudWatchConfig } from '../config/cloudwatch';
+import { cloudWatchConfig, isCloudWatchEnabled } from '../config/cloudwatch';
 
-// Configure AWS CloudWatch Logs
-const logs = new AWS.CloudWatchLogs({
-  region: cloudWatchConfig.region,
-  accessKeyId: cloudWatchConfig.accessKeyId,
-  secretAccessKey: cloudWatchConfig.secretAccessKey
-});
+// Configure AWS CloudWatch Logs only if credentials are available
+let logs = null;
+if (isCloudWatchEnabled()) {
+  logs = new AWS.CloudWatchLogs({
+    region: cloudWatchConfig.region,
+    accessKeyId: cloudWatchConfig.accessKeyId,
+    secretAccessKey: cloudWatchConfig.secretAccessKey
+  });
+}
 
 /**
  * Log any message to CloudWatch with specified level
@@ -22,6 +25,12 @@ const logs = new AWS.CloudWatchLogs({
  */
 async function logToCloudWatch(message, level = 'INFO', context = {}, streamName = null) {
   try {
+    // Check if CloudWatch is enabled and configured
+    if (!isCloudWatchEnabled() || !logs) {
+      console.log(`${level} (CloudWatch disabled):`, message, context);
+      return;
+    }
+
     const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
     
     await logs.putLogEvents({
@@ -165,6 +174,38 @@ export const cloudWatchLogger = {
       operation,
       errorCode: error.code || 'unknown'
     });
+  },
+
+  // Configuration and diagnostics
+  getStatus() {
+    return {
+      enabled: isCloudWatchEnabled(),
+      configured: logs !== null,
+      config: {
+        region: cloudWatchConfig.region,
+        logGroupName: cloudWatchConfig.logGroupName,
+        logStreamName: cloudWatchConfig.logStreamName,
+        activityStreamName: cloudWatchConfig.activityStreamName,
+        hasCredentials: !!(cloudWatchConfig.accessKeyId && cloudWatchConfig.secretAccessKey)
+      }
+    };
+  },
+
+  // Test CloudWatch connectivity
+  async testConnection() {
+    if (!isCloudWatchEnabled() || !logs) {
+      return { success: false, error: 'CloudWatch not configured' };
+    }
+
+    try {
+      await logToCloudWatch('CloudWatch connection test', 'INFO', {
+        test: true,
+        timestamp: new Date().toISOString()
+      });
+      return { success: true, message: 'CloudWatch connection successful' };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
   }
 };
 
