@@ -6,12 +6,66 @@
 import AWS from 'aws-sdk';
 import { cloudWatchConfig } from '../config/cloudwatch';
 
-// Configure AWS CloudWatch Logs
-const logs = new AWS.CloudWatchLogs({
-  region: cloudWatchConfig.region,
-  accessKeyId: cloudWatchConfig.accessKeyId,
-  secretAccessKey: cloudWatchConfig.secretAccessKey
-});
+// Configure AWS CloudWatch Logs only if configuration is valid
+let logs = null;
+let isCloudWatchAvailable = false;
+
+if (cloudWatchConfig.isValid) {
+  try {
+    logs = new AWS.CloudWatchLogs({
+      region: cloudWatchConfig.region,
+      accessKeyId: cloudWatchConfig.accessKeyId,
+      secretAccessKey: cloudWatchConfig.secretAccessKey
+    });
+    isCloudWatchAvailable = true;
+  } catch (error) {
+    console.warn('Failed to initialize CloudWatch:', error);
+    isCloudWatchAvailable = false;
+  }
+} else {
+  console.warn('CloudWatch logging disabled due to missing configuration');
+}
+
+// Fallback logging queue for when CloudWatch is unavailable
+const logQueue = [];
+const MAX_QUEUE_SIZE = 100;
+
+/**
+ * Fallback logging to console and local storage
+ */
+function fallbackLog(message, level, context) {
+  const logEntry = {
+    timestamp: new Date().toISOString(),
+    level,
+    message,
+    context,
+    source: window.location.host
+  };
+  
+  // Log to console
+  console.log(`${level} (fallback):`, message, context);
+  
+  // Store in queue for potential retry
+  if (logQueue.length >= MAX_QUEUE_SIZE) {
+    logQueue.shift(); // Remove oldest entry
+  }
+  logQueue.push(logEntry);
+  
+  // Store critical errors in localStorage for debugging
+  if (level === 'ERROR') {
+    try {
+      const existingErrors = JSON.parse(localStorage.getItem('acm_error_logs') || '[]');
+      existingErrors.push(logEntry);
+      // Keep only last 50 errors
+      if (existingErrors.length > 50) {
+        existingErrors.splice(0, existingErrors.length - 50);
+      }
+      localStorage.setItem('acm_error_logs', JSON.stringify(existingErrors));
+    } catch (e) {
+      console.warn('Failed to store error in localStorage:', e);
+    }
+  }
+}
 
 /**
  * Log any message to CloudWatch with specified level
@@ -21,23 +75,51 @@ const logs = new AWS.CloudWatchLogs({
  * @param {string} streamName - Optional custom stream name
  */
 async function logToCloudWatch(message, level = 'INFO', context = {}, streamName = null) {
-  try {
-    const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
-    
-    await logs.putLogEvents({
-      logGroupName: cloudWatchConfig.logGroupName,
-      logStreamName: streamName || cloudWatchConfig.logStreamName,
-      logEvents: [{
-        timestamp: Date.now(),
-        message: logMessage
-      }]
-    }).promise();
-    
-    console.log(`${level} logged to CloudWatch:`, message);
-  } catch (err) {
-    console.log('Failed to log to CloudWatch:', err);
-    // Fallback: log to console
-    console.log(`${level} (fallback):`, message, context);
+  // If CloudWatch is not available, use fallback logging
+  if (!isCloudWatchAvailable || !logs) {
+    fallbackLog(message, level, context);
+    return;
+  }
+
+  const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
+  
+  // Retry logic for CloudWatch API calls
+  const maxRetries = 2;
+  let retryCount = 0;
+  
+  while (retryCount <= maxRetries) {
+    try {
+      await logs.putLogEvents({
+        logGroupName: cloudWatchConfig.logGroupName,
+        logStreamName: streamName || cloudWatchConfig.logStreamName,
+        logEvents: [{
+          timestamp: Date.now(),
+          message: logMessage
+        }]
+      }).promise();
+      
+      console.log(`${level} logged to CloudWatch:`, message);
+      return; // Success, exit retry loop
+      
+    } catch (err) {
+      retryCount++;
+      console.warn(`CloudWatch logging attempt ${retryCount} failed:`, err);
+      
+      if (retryCount > maxRetries) {
+        console.warn('CloudWatch logging failed after all retries, using fallback');
+        fallbackLog(message, level, context);
+        
+        // Temporarily disable CloudWatch if we're getting consistent failures
+        if (err.code === 'UnauthorizedOperation' || err.code === 'AccessDenied') {
+          console.warn('CloudWatch access denied, disabling for this session');
+          isCloudWatchAvailable = false;
+        }
+        return;
+      }
+      
+      // Wait before retry (exponential backoff)
+      await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
+    }
   }
 }
 
@@ -165,6 +247,51 @@ export const cloudWatchLogger = {
       operation,
       errorCode: error.code || 'unknown'
     });
+  },
+
+  // Utility functions for debugging and monitoring
+  getQueuedLogs() {
+    return [...logQueue];
+  },
+
+  clearQueue() {
+    logQueue.length = 0;
+  },
+
+  isCloudWatchEnabled() {
+    return isCloudWatchAvailable;
+  },
+
+  getStoredErrors() {
+    try {
+      return JSON.parse(localStorage.getItem('acm_error_logs') || '[]');
+    } catch (e) {
+      console.warn('Failed to retrieve stored errors:', e);
+      return [];
+    }
+  },
+
+  clearStoredErrors() {
+    try {
+      localStorage.removeItem('acm_error_logs');
+    } catch (e) {
+      console.warn('Failed to clear stored errors:', e);
+    }
+  },
+
+  // Health check function
+  async healthCheck() {
+    if (!isCloudWatchAvailable) {
+      return { status: 'disabled', reason: 'Configuration invalid or initialization failed' };
+    }
+
+    try {
+      // Try a simple operation to verify connectivity
+      await this.info('CloudWatch health check', { type: 'health_check' });
+      return { status: 'healthy' };
+    } catch (error) {
+      return { status: 'unhealthy', error: error.message };
+    }
   }
 };
 

@@ -297,32 +297,94 @@ window.addEventListener('unhandledrejection', (event) => {
 });
 
 // Global activity logging - creates nginx log entries
-window.addEventListener('click', async (event) => {
-  try {
-    const target = event.target;
-    const tagName = target.tagName.toLowerCase();
-    
-    // Log button clicks to server (nginx will log the request)
-    if (tagName === 'button' || target.classList.contains('v-btn')) {
-      await serverLogger.logButtonClick(target.textContent?.trim() || 'Unknown Button');
-    }
-  } catch (error) {
-    console.log('Failed to log click activity:', error);
-  }
-});
+let clickHandler = null;
+let submitHandler = null;
+let errorHandler = null;
+let unhandledRejectionHandler = null;
 
-// Log form submissions
-window.addEventListener('submit', async (event) => {
-  try {
-    await cloudWatchLogger.logUserAction('Form Submission', {
-      formId: event.target.id,
-      formClass: event.target.className,
-      action: event.target.action
+// Initialize event listeners with proper cleanup
+function initializeEventListeners() {
+  // Click handler
+  clickHandler = async (event) => {
+    try {
+      const target = event.target;
+      const tagName = target.tagName.toLowerCase();
+      
+      // Log button clicks to server (nginx will log the request)
+      if (tagName === 'button' || target.classList.contains('v-btn')) {
+        await serverLogger.logButtonClick(target.textContent?.trim() || 'Unknown Button');
+      }
+    } catch (error) {
+      console.log('Failed to log click activity:', error);
+    }
+  };
+
+  // Form submission handler
+  submitHandler = async (event) => {
+    try {
+      await cloudWatchLogger.logUserAction('Form Submission', {
+        formId: event.target.id,
+        formClass: event.target.className,
+        action: event.target.action
+      });
+    } catch (error) {
+      console.log('Failed to log form submission:', error);
+    }
+  };
+
+  // Global JavaScript error handler
+  errorHandler = (event) => {
+    console.error('Global JavaScript Error:', event.error);
+    
+    // Log to CloudWatch
+    cloudWatchLogger.error(
+      `Global JavaScript Error: ${event.error?.message || event.message}`,
+      {
+        type: 'javascript_error',
+        filename: event.filename,
+        lineno: event.lineno,
+        colno: event.colno,
+        url: window.location.href
+      }
+    ).catch(logError => {
+      console.error('Failed to log JS error to CloudWatch:', logError);
     });
-  } catch (error) {
-    console.log('Failed to log form submission:', error);
-  }
-});
+  };
+
+  // Global unhandled promise rejection handler
+  unhandledRejectionHandler = (event) => {
+    console.error('Unhandled Promise Rejection:', event.reason);
+    
+    // Log to CloudWatch
+    cloudWatchLogger.error(
+      `Unhandled Promise Rejection: ${event.reason}`,
+      {
+        type: 'promise_rejection',
+        url: window.location.href,
+        userAgent: navigator.userAgent
+      }
+    ).catch(logError => {
+      console.error('Failed to log promise rejection to CloudWatch:', logError);
+    });
+  };
+
+  // Add event listeners
+  window.addEventListener('click', clickHandler);
+  window.addEventListener('submit', submitHandler);
+  window.addEventListener('error', errorHandler);
+  window.addEventListener('unhandledrejection', unhandledRejectionHandler);
+}
+
+// Cleanup function for event listeners
+function cleanupEventListeners() {
+  if (clickHandler) window.removeEventListener('click', clickHandler);
+  if (submitHandler) window.removeEventListener('submit', submitHandler);
+  if (errorHandler) window.removeEventListener('error', errorHandler);
+  if (unhandledRejectionHandler) window.removeEventListener('unhandledrejection', unhandledRejectionHandler);
+}
+
+// Initialize event listeners
+initializeEventListeners();
 
 // Log authentication state changes
 auth.onAuthStateChanged(async (user) => {
@@ -343,24 +405,8 @@ auth.onAuthStateChanged(async (user) => {
   }
 });
 
-// Global JavaScript error handler
-window.addEventListener('error', (event) => {
-  console.error('Global JavaScript Error:', event.error);
-  
-  // Log to CloudWatch
-  cloudWatchLogger.error(
-    `Global JavaScript Error: ${event.error?.message || event.message}`,
-    {
-      type: 'javascript_error',
-      filename: event.filename,
-      lineno: event.lineno,
-      colno: event.colno,
-      url: window.location.href
-    }
-  ).catch(logError => {
-    console.error('Failed to log JS error to CloudWatch:', logError);
-  });
-});
+// Expose cleanup function globally for potential use
+window.cleanupACMEventListeners = cleanupEventListeners;
 
 app.use(router);
 app.use(vuetify);
