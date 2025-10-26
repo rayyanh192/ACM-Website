@@ -131,12 +131,73 @@ export const cloudWatchLogger = {
     });
   },
 
-  // Payment errors
+  // Payment errors with enhanced timeout handling
   async paymentError(error, transactionId = null) {
-    return logError(`Payment processing failed: ${error.message}`, {
+    const errorContext = {
       type: 'payment',
       transactionId,
-      errorCode: error.code || 'unknown'
+      errorCode: error.code || 'unknown',
+      timeout: error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT',
+      connectionError: error.message.includes('connection') || error.message.includes('timeout')
+    };
+    
+    // Enhanced error message for payment timeouts
+    let errorMessage = `Payment processing failed: ${error.message}`;
+    if (errorContext.timeout) {
+      errorMessage = `Payment service connection failed - timeout after 5000ms: ${error.message}`;
+    }
+    
+    return logError(errorMessage, errorContext);
+  },
+
+  // Database errors with connection pool monitoring
+  async databaseError(error, operation = 'unknown') {
+    const errorContext = {
+      type: 'database',
+      operation,
+      errorCode: error.code || 'unknown',
+      poolExhausted: error.message.includes('connection pool exhausted') || 
+                     error.message.includes('Too many connections') ||
+                     error.code === 'POOL_CLOSED',
+      timeout: error.code === 'PROTOCOL_SEQUENCE_TIMEOUT' || error.message.includes('timeout')
+    };
+    
+    // Enhanced error message for pool exhaustion
+    let errorMessage = `Database ${operation} failed: ${error.message}`;
+    if (errorContext.poolExhausted) {
+      errorMessage = `Database query failed: connection pool exhausted - ${error.message}`;
+    }
+    
+    return logError(errorMessage, errorContext);
+  },
+
+  // Connection timeout specific logging
+  async connectionTimeout(service, timeout, error = null) {
+    return logError(`${service} connection timeout after ${timeout}ms`, {
+      type: 'connection_timeout',
+      service,
+      timeout,
+      error: error ? error.message : null
+    });
+  },
+
+  // Pool exhaustion specific logging
+  async poolExhaustion(poolType, stats = {}) {
+    return logError(`${poolType} connection pool exhausted`, {
+      type: 'pool_exhaustion',
+      poolType,
+      stats
+    });
+  },
+
+  // Service health monitoring
+  async serviceHealth(serviceName, status, metrics = {}) {
+    const level = status === 'healthy' ? 'INFO' : 'ERROR';
+    return logToCloudWatch(`Service ${serviceName} health: ${status}`, level, {
+      type: 'service_health',
+      service: serviceName,
+      status,
+      metrics
     });
   },
 

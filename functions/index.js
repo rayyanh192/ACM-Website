@@ -12,7 +12,17 @@ const nodemailer = require("nodemailer");
 const {tz} = require("moment-timezone");
 // const {App} = require("@slack/bolt");
 
+// Import new payment and database modules
+const { processPayment, paymentHealthCheck } = require("./payment_handler");
+const { connectionPool } = require("./connection_pool");
+const { databaseConfig } = require("./database_config");
+
 admin.initializeApp();
+
+// Initialize connection pool on startup
+connectionPool.initialize().catch(error => {
+  console.error('Failed to initialize connection pool:', error);
+});
 
 exports.addRole = functions.https.onCall(async (data, context) => {
     const isAdmin = context.auth.token.admin || false;
@@ -311,4 +321,44 @@ function formatDateTime(event) {
     // Otherwise, return the start date and time and end date and time. Ex: Feb 12th, 2022, 10:00 am - Feb 13th, 2022, 12:00 pm
     return `${startDate} ${startTime} - ${endDate} ${endTime}`;
 }
+
+// Export payment processing functions
+exports.processPayment = processPayment;
+exports.paymentHealthCheck = paymentHealthCheck;
+
+// Database health check function
+exports.databaseHealthCheck = functions.https.onRequest(async (req, res) => {
+  try {
+    const stats = connectionPool.getStats();
+    const isHealthy = await connectionPool.testConnection();
+    
+    res.status(isHealthy ? 200 : 503).json({
+      status: isHealthy ? 'healthy' : 'unhealthy',
+      connectionPool: {
+        initialized: stats.isInitialized,
+        totalConnections: stats.totalConnections,
+        activeConnections: stats.activeConnections,
+        queuedRequests: stats.queuedRequests,
+        errors: stats.errors,
+        timeouts: stats.timeouts,
+        lastHealthCheck: stats.lastHealthCheck,
+        poolStats: stats.pool
+      },
+      config: {
+        connectionLimit: databaseConfig.connectionLimit,
+        acquireTimeout: databaseConfig.acquireTimeout,
+        timeout: databaseConfig.timeout
+      },
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('Database health check failed:', error);
+    res.status(503).json({
+      status: 'error',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
 

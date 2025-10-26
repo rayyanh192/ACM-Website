@@ -96,13 +96,18 @@ export default {
           testType: 'payment_error'
         });
         
-        await cloudWatchLogger.paymentError(
-          new Error('Payment processing failed - insufficient funds'),
-          'txn_123456789'
-        );
+        // Simulate the specific payment timeout error from the logs
+        const timeoutError = new Error('HTTPSConnectionPool timeout');
+        timeoutError.code = 'ECONNABORTED';
+        
+        await cloudWatchLogger.paymentError(timeoutError, 'txn_123456789');
+        
+        // Also test connection timeout logging
+        await cloudWatchLogger.connectionTimeout('payment-service', 5000, timeoutError);
+        
         this.lastResult = {
           success: true,
-          message: 'Payment error logged to CloudWatch successfully!'
+          message: 'Payment timeout error logged to CloudWatch successfully!'
         };
       } catch (error) {
         this.lastResult = {
@@ -123,13 +128,22 @@ export default {
           testType: 'database_error'
         });
         
-        await cloudWatchLogger.databaseError(
-          new Error('Database connection timeout'),
-          'user_query'
-        );
+        // Simulate the specific database pool exhaustion error from the logs
+        const poolError = new Error('connection pool exhausted');
+        poolError.code = 'POOL_CLOSED';
+        
+        await cloudWatchLogger.databaseError(poolError, 'user_query');
+        
+        // Also test pool exhaustion logging
+        await cloudWatchLogger.poolExhaustion('database', {
+          totalConnections: 10,
+          activeConnections: 10,
+          queuedRequests: 5
+        });
+        
         this.lastResult = {
           success: true,
-          message: 'Database error logged to CloudWatch successfully!'
+          message: 'Database pool exhaustion error logged to CloudWatch successfully!'
         };
       } catch (error) {
         this.lastResult = {
