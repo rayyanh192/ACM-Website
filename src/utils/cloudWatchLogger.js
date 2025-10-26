@@ -1,43 +1,79 @@
 /**
  * CloudWatch Logger for Vue.js Application
  * Sends errors directly to CloudWatch from the frontend
+ * Enhanced with connection pool management and timeout handling
  */
 
 import AWS from 'aws-sdk';
 import { cloudWatchConfig } from '../config/cloudwatch';
 
-// Configure AWS CloudWatch Logs
+// Configure AWS CloudWatch Logs with enhanced timeout settings
 const logs = new AWS.CloudWatchLogs({
   region: cloudWatchConfig.region,
   accessKeyId: cloudWatchConfig.accessKeyId,
-  secretAccessKey: cloudWatchConfig.secretAccessKey
+  secretAccessKey: cloudWatchConfig.secretAccessKey,
+  httpOptions: {
+    timeout: 30000, // 30 second timeout
+    connectTimeout: 10000 // 10 second connection timeout
+  },
+  maxRetries: 3,
+  retryDelayOptions: {
+    customBackoff: function(retryCount) {
+      return Math.pow(2, retryCount) * 1000; // Exponential backoff
+    }
+  }
 });
 
 /**
  * Log any message to CloudWatch with specified level
+ * Enhanced with better error handling and timeout management
  * @param {string} message - Message to log
  * @param {string} level - Log level (INFO, ERROR, DEBUG, WARN)
  * @param {Object} context - Additional context information
  * @param {string} streamName - Optional custom stream name
  */
 async function logToCloudWatch(message, level = 'INFO', context = {}, streamName = null) {
+  const startTime = Date.now();
+  
   try {
     const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
     
-    await logs.putLogEvents({
+    const params = {
       logGroupName: cloudWatchConfig.logGroupName,
       logStreamName: streamName || cloudWatchConfig.logStreamName,
       logEvents: [{
         timestamp: Date.now(),
         message: logMessage
       }]
-    }).promise();
+    };
+
+    // Add timeout wrapper
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('CloudWatch logging timeout')), 15000);
+    });
+
+    await Promise.race([
+      logs.putLogEvents(params).promise(),
+      timeoutPromise
+    ]);
     
-    console.log(`${level} logged to CloudWatch:`, message);
+    const duration = Date.now() - startTime;
+    console.log(`${level} logged to CloudWatch in ${duration}ms:`, message);
+    
   } catch (err) {
-    console.log('Failed to log to CloudWatch:', err);
-    // Fallback: log to console
-    console.log(`${level} (fallback):`, message, context);
+    const duration = Date.now() - startTime;
+    console.error(`Failed to log to CloudWatch after ${duration}ms:`, err);
+    
+    // Enhanced fallback logging with error details
+    console.log(`${level} (fallback):`, message, {
+      ...context,
+      cloudWatchError: err.message,
+      duration,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Don't throw the error to prevent cascading failures
+    // Just log it for monitoring
   }
 }
 
@@ -113,13 +149,25 @@ export const cloudWatchLogger = {
     }, cloudWatchConfig.activityStreamName);
   },
 
-  // Database errors
+  // Database errors - Enhanced with connection pool monitoring
   async databaseError(error, operation = 'unknown') {
-    return logError(`Database ${operation} failed: ${error.message}`, {
+    const errorContext = {
       type: 'database',
       operation,
-      errorCode: error.code || 'unknown'
-    });
+      errorCode: error.code || 'unknown',
+      errorName: error.name || 'unknown'
+    };
+
+    // Add specific handling for connection pool errors
+    if (error.message.includes('pool exhausted') || error.message.includes('connection pool')) {
+      errorContext.poolStatus = 'exhausted';
+      errorContext.errorType = 'connection_pool';
+    } else if (error.message.includes('timeout') || error.name === 'TimeoutError') {
+      errorContext.errorType = 'timeout';
+      errorContext.timeoutType = 'database_connection';
+    }
+
+    return logError(`Database ${operation} failed: ${error.message}`, errorContext);
   },
 
   // API errors
@@ -131,13 +179,22 @@ export const cloudWatchLogger = {
     });
   },
 
-  // Payment errors
+  // Payment errors - Enhanced with connection timeout handling
   async paymentError(error, transactionId = null) {
-    return logError(`Payment processing failed: ${error.message}`, {
+    const errorContext = {
       type: 'payment',
       transactionId,
-      errorCode: error.code || 'unknown'
-    });
+      errorCode: error.code || 'unknown',
+      errorName: error.name || 'unknown'
+    };
+
+    // Add specific handling for payment timeout errors
+    if (error.name === 'TimeoutError' || error.message.includes('timeout')) {
+      errorContext.timeoutType = 'payment_service';
+      errorContext.originalTimeout = error.timeout || 'unknown';
+    }
+
+    return logError(`Payment processing failed: ${error.message}`, errorContext);
   },
 
   // Authentication errors
@@ -164,6 +221,29 @@ export const cloudWatchLogger = {
       type: 'firebase',
       operation,
       errorCode: error.code || 'unknown'
+    });
+  },
+
+  // Connection pool errors - New method for connection pool monitoring
+  async connectionPoolError(error, poolType = 'http', poolStats = {}) {
+    return logError(`Connection pool ${poolType} error: ${error.message}`, {
+      type: 'connection_pool',
+      poolType,
+      poolStats,
+      errorCode: error.code || 'unknown',
+      errorName: error.name || 'unknown'
+    });
+  },
+
+  // System health monitoring
+  async systemHealth(component, status, metrics = {}) {
+    const level = status === 'healthy' ? 'INFO' : 'WARN';
+    return logToCloudWatch(`System health check: ${component} is ${status}`, level, {
+      type: 'health_check',
+      component,
+      status,
+      metrics,
+      timestamp: new Date().toISOString()
     });
   }
 };
