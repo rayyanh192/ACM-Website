@@ -1,7 +1,4 @@
-/**
- * Centralized logging utility for CloudWatch integration
- * Handles error logging and sends data to CloudWatch via Firebase Functions
- */
+import httpClient from './httpClient.js';
 
 class Logger {
   constructor() {
@@ -57,22 +54,23 @@ class Logger {
    */
   async sendToCloudWatch(logData) {
     try {
-      const response = await fetch('/api/log-error', {
-        method: 'POST',
+      const response = await httpClient.post('/api/log-error', logData, {
+        timeout: 8000, // 8 second timeout for logging
         headers: {
           'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(logData)
+        }
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
 
       return await response.json();
     } catch (error) {
-      // If the API endpoint doesn't exist yet, we'll handle it gracefully
-      console.warn('CloudWatch API not available:', error.message);
+      // Enhanced error handling for different timeout scenarios
+      if (error.message.includes('timeout')) {
+        console.warn('CloudWatch API timeout - logging operation took too long:', error.message);
+      } else if (error.message.includes('Connection pool exhausted')) {
+        console.warn('CloudWatch API connection pool exhausted:', error.message);
+      } else {
+        console.warn('CloudWatch API not available:', error.message);
+      }
       throw error;
     }
   }

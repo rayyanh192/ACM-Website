@@ -6,11 +6,22 @@
 import AWS from 'aws-sdk';
 import { cloudWatchConfig } from '../config/cloudwatch';
 
-// Configure AWS CloudWatch Logs
+// Configure AWS CloudWatch Logs with timeout and retry settings
 const logs = new AWS.CloudWatchLogs({
   region: cloudWatchConfig.region,
   accessKeyId: cloudWatchConfig.accessKeyId,
-  secretAccessKey: cloudWatchConfig.secretAccessKey
+  secretAccessKey: cloudWatchConfig.secretAccessKey,
+  httpOptions: {
+    timeout: 10000, // 10 second timeout
+    connectTimeout: 5000 // 5 second connection timeout
+  },
+  maxRetries: 3,
+  retryDelayOptions: {
+    customBackoff: function(retryCount) {
+      // Exponential backoff: 1s, 2s, 4s
+      return Math.pow(2, retryCount) * 1000;
+    }
+  }
 });
 
 /**
@@ -21,23 +32,66 @@ const logs = new AWS.CloudWatchLogs({
  * @param {string} streamName - Optional custom stream name
  */
 async function logToCloudWatch(message, level = 'INFO', context = {}, streamName = null) {
-  try {
-    const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
-    
-    await logs.putLogEvents({
-      logGroupName: cloudWatchConfig.logGroupName,
-      logStreamName: streamName || cloudWatchConfig.logStreamName,
-      logEvents: [{
-        timestamp: Date.now(),
-        message: logMessage
-      }]
-    }).promise();
-    
-    console.log(`${level} logged to CloudWatch:`, message);
-  } catch (err) {
-    console.log('Failed to log to CloudWatch:', err);
-    // Fallback: log to console
-    console.log(`${level} (fallback):`, message, context);
+  const maxRetries = 3;
+  let lastError;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
+      
+      await logs.putLogEvents({
+        logGroupName: cloudWatchConfig.logGroupName,
+        logStreamName: streamName || cloudWatchConfig.logStreamName,
+        logEvents: [{
+          timestamp: Date.now(),
+          message: logMessage
+        }]
+      }).promise();
+      
+      console.log(`${level} logged to CloudWatch:`, message);
+      return; // Success, exit retry loop
+      
+    } catch (err) {
+      lastError = err;
+      
+      if (attempt === maxRetries) {
+        break; // Final attempt failed
+      }
+
+      // Check if error is retryable
+      const isRetryable = err.code === 'NetworkingError' || 
+                         err.code === 'TimeoutError' ||
+                         err.code === 'RequestTimeout' ||
+                         err.statusCode >= 500;
+
+      if (!isRetryable) {
+        break; // Don't retry non-retryable errors
+      }
+
+      const delay = Math.pow(2, attempt) * 1000; // Exponential backoff
+      console.warn(`CloudWatch logging attempt ${attempt} failed, retrying in ${delay}ms:`, err.message);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  // All retries failed
+  console.error('Failed to log to CloudWatch after all retries:', lastError);
+  
+  // Enhanced fallback logging with error categorization
+  const fallbackContext = {
+    ...context,
+    cloudWatchError: lastError.message,
+    cloudWatchErrorCode: lastError.code,
+    retryAttempts: maxRetries,
+    timestamp: new Date().toISOString()
+  };
+
+  if (lastError.message.includes('timeout') || lastError.code === 'TimeoutError') {
+    console.error(`${level} (CloudWatch timeout fallback):`, message, fallbackContext);
+  } else if (lastError.message.includes('connection') || lastError.code === 'NetworkingError') {
+    console.error(`${level} (CloudWatch connection fallback):`, message, fallbackContext);
+  } else {
+    console.error(`${level} (CloudWatch fallback):`, message, fallbackContext);
   }
 }
 
@@ -115,11 +169,23 @@ export const cloudWatchLogger = {
 
   // Database errors
   async databaseError(error, operation = 'unknown') {
-    return logError(`Database ${operation} failed: ${error.message}`, {
+    const errorContext = {
       type: 'database',
       operation,
       errorCode: error.code || 'unknown'
-    });
+    };
+
+    // Add specific context for connection pool and timeout errors
+    if (error.message.includes('connection pool exhausted')) {
+      errorContext.errorSubtype = 'CONNECTION_POOL_EXHAUSTED';
+    } else if (error.message.includes('timeout')) {
+      errorContext.errorSubtype = 'TIMEOUT';
+      errorContext.timeoutDuration = error.message.match(/(\d+)ms/) ? error.message.match(/(\d+)ms/)[1] : 'unknown';
+    } else if (error.message.includes('connection')) {
+      errorContext.errorSubtype = 'CONNECTION_ERROR';
+    }
+
+    return logError(`Database ${operation} failed: ${error.message}`, errorContext);
   },
 
   // API errors
@@ -133,11 +199,23 @@ export const cloudWatchLogger = {
 
   // Payment errors
   async paymentError(error, transactionId = null) {
-    return logError(`Payment processing failed: ${error.message}`, {
+    const errorContext = {
       type: 'payment',
       transactionId,
       errorCode: error.code || 'unknown'
-    });
+    };
+
+    // Add specific context for timeout errors
+    if (error.message.includes('timeout')) {
+      errorContext.errorSubtype = 'TIMEOUT';
+      errorContext.timeoutDuration = error.message.match(/(\d+)ms/) ? error.message.match(/(\d+)ms/)[1] : 'unknown';
+    } else if (error.message.includes('Connection pool exhausted')) {
+      errorContext.errorSubtype = 'CONNECTION_POOL_EXHAUSTED';
+    } else if (error.message.includes('HTTPSConnectionPool')) {
+      errorContext.errorSubtype = 'HTTPS_CONNECTION_ERROR';
+    }
+
+    return logError(`Payment processing failed: ${error.message}`, errorContext);
   },
 
   // Authentication errors
