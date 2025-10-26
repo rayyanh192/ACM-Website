@@ -232,28 +232,48 @@ export async function getUserPerms(user) {
     const defaultRole = "default";
     const scuRole = "scu";
 
-    const idToken = await user.getIdTokenResult();
-    const myRoles = (idToken.claims ?? []).roles ?? [];
+    try {
+        const idToken = await user.getIdTokenResult();
+        const myRoles = (idToken.claims ?? []).roles ?? [];
 
-    myRoles.push(defaultRole);
-    const email = user.providerData[0].email;
-    if (email.endsWith("@scu.edu") || email.endsWith("@alumni.scu.edu")){
-        myRoles.push(scuRole)
-    }
-
-    const userPerms = {};
-    for(let perm of permsList) {
-        userPerms[perm] = false;
-    }
-    for(let role of myRoles) {
-        let values = await db.collection("roles").doc(role).get();
-        for(let perm of permsList) {
-            userPerms[perm] = userPerms[perm] || values.data()[perm];
+        myRoles.push(defaultRole);
+        const email = user.providerData[0].email;
+        if (email.endsWith("@scu.edu") || email.endsWith("@alumni.scu.edu")){
+            myRoles.push(scuRole)
         }
+
+        const userPerms = {};
+        for(let perm of permsList) {
+            userPerms[perm] = false;
+        }
+        
+        // Add timeout and error handling for role queries
+        for(let role of myRoles) {
+            try {
+                let values = await db.collection("roles").doc(role).get();
+                if (values.exists) {
+                    for(let perm of permsList) {
+                        userPerms[perm] = userPerms[perm] || values.data()[perm];
+                    }
+                }
+            } catch (error) {
+                console.warn(`Failed to fetch role ${role}:`, error.message);
+                // Continue with other roles even if one fails
+            }
+        }
+        
+        // console.log("USER PERMS", userPerms);
+        cachedUserPerms = userPerms;
+        return userPerms;
+    } catch (error) {
+        console.error('Error getting user permissions:', error.message);
+        // Return default permissions on error
+        const defaultPerms = {};
+        for(let perm of permsList) {
+            defaultPerms[perm] = false;
+        }
+        return defaultPerms;
     }
-    // console.log("USER PERMS", userPerms);
-    cachedUserPerms = userPerms;
-    return userPerms;
 }
 
 export const eventTags = {
