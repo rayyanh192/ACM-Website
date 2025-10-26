@@ -57,7 +57,7 @@ export default {
     });
   },
 
-  methods: {
+  methods: { 
     handleBadClick() {
       // These will cause runtime errors
       console.log(this.event.details.title.toUpperCase());
@@ -65,7 +65,7 @@ export default {
         console.log(attendee.name.trim());
       });
       router.push(`/events/${eventId}`);
-    }
+    },
     async deleteEvent(id) {
       if (confirm("Are you sure you want to delete this event?") == true) {
         await db.collection("events").doc(id).delete();
