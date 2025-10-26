@@ -27,6 +27,8 @@ import TestCloudWatch from "@/pages/TestCloudWatch.vue";
 import {auth} from './firebase';
 import { getUserPerms } from "./helpers";
 import { serverLogger } from './utils/serverLogger';
+import { cloudWatchLogger } from './utils/cloudWatchLogger';
+import { initializeErrorHandling, cleanupErrorHandling } from './utils/errorHandlingInit';
 import '@mdi/font/css/materialdesignicons.css';
 import '@/assets/override.css';
 
@@ -363,4 +365,17 @@ window.addEventListener('error', (event) => {
 
 app.use(router);
 app.use(vuetify);
+
+// Initialize error handling and monitoring systems
+initializeErrorHandling().then(() => {
+  console.log('✅ Application initialized with enhanced error handling');
+}).catch(error => {
+  console.error('❌ Failed to initialize error handling:', error);
+});
+
+// Cleanup on app unmount
+window.addEventListener('beforeunload', () => {
+  cleanupErrorHandling();
+});
+
 app.mount("#app")
