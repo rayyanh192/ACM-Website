@@ -202,7 +202,7 @@ router.beforeEach( async (to, from) => {
       hasPerms: to.matched.find(record => record.meta.permsRequired)?.meta?.permsRequired ? true : false
     });
   } catch (error) {
-    console.log('Failed to log navigation:', error);
+    console.warn('Failed to log navigation (continuing normally):', error);
   }
 
   //Check if the page we are going to requires a user to be signed in or admin permissions
@@ -252,7 +252,7 @@ router.afterEach(async (to, from) => {
       query: to.query
     });
   } catch (error) {
-    console.log('Failed to log page view:', error);
+    console.warn('Failed to log page view (continuing normally):', error);
   }
 });
 
@@ -275,7 +275,7 @@ app.config.errorHandler = (err, vm, info) => {
     vm?.$options?.name || 'Unknown', 
     info || 'unknown'
   ).catch(logError => {
-    console.error('Failed to log Vue error to CloudWatch:', logError);
+    console.warn('Failed to log Vue error to CloudWatch (continuing normally):', logError);
   });
 };
 
@@ -292,7 +292,7 @@ window.addEventListener('unhandledrejection', (event) => {
       userAgent: navigator.userAgent
     }
   ).catch(logError => {
-    console.error('Failed to log promise rejection to CloudWatch:', logError);
+    console.warn('Failed to log promise rejection to CloudWatch (continuing normally):', logError);
   });
 });
 
@@ -307,7 +307,7 @@ window.addEventListener('click', async (event) => {
       await serverLogger.logButtonClick(target.textContent?.trim() || 'Unknown Button');
     }
   } catch (error) {
-    console.log('Failed to log click activity:', error);
+    console.warn('Failed to log click activity (continuing normally):', error);
   }
 });
 
@@ -320,7 +320,7 @@ window.addEventListener('submit', async (event) => {
       action: event.target.action
     });
   } catch (error) {
-    console.log('Failed to log form submission:', error);
+    console.warn('Failed to log form submission (continuing normally):', error);
   }
 });
 
@@ -339,7 +339,7 @@ auth.onAuthStateChanged(async (user) => {
       });
     }
   } catch (error) {
-    console.log('Failed to log auth state change:', error);
+    console.warn('Failed to log auth state change (continuing normally):', error);
   }
 });
 
@@ -358,7 +358,7 @@ window.addEventListener('error', (event) => {
       url: window.location.href
     }
   ).catch(logError => {
-    console.error('Failed to log JS error to CloudWatch:', logError);
+    console.warn('Failed to log JS error to CloudWatch (continuing normally):', logError);
   });
 });
 

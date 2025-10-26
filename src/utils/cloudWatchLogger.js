@@ -6,12 +6,20 @@
 import AWS from 'aws-sdk';
 import { cloudWatchConfig } from '../config/cloudwatch';
 
-// Configure AWS CloudWatch Logs
-const logs = new AWS.CloudWatchLogs({
-  region: cloudWatchConfig.region,
-  accessKeyId: cloudWatchConfig.accessKeyId,
-  secretAccessKey: cloudWatchConfig.secretAccessKey
-});
+// Configure AWS CloudWatch Logs only if configuration is complete
+let logs = null;
+if (cloudWatchConfig.isConfigured) {
+  try {
+    logs = new AWS.CloudWatchLogs({
+      region: cloudWatchConfig.region,
+      accessKeyId: cloudWatchConfig.accessKeyId,
+      secretAccessKey: cloudWatchConfig.secretAccessKey
+    });
+  } catch (error) {
+    console.warn('Failed to initialize CloudWatch client:', error);
+    console.warn('CloudWatch logging will be disabled. Logs will fallback to console.');
+  }
+}
 
 /**
  * Log any message to CloudWatch with specified level
@@ -21,6 +29,14 @@ const logs = new AWS.CloudWatchLogs({
  * @param {string} streamName - Optional custom stream name
  */
 async function logToCloudWatch(message, level = 'INFO', context = {}, streamName = null) {
+  // Always log to console as fallback
+  console.log(`${level} (${cloudWatchConfig.isConfigured ? 'CloudWatch' : 'Console-only'}):`, message, context);
+  
+  // If CloudWatch is not configured or available, skip CloudWatch logging
+  if (!cloudWatchConfig.isConfigured || !logs) {
+    return;
+  }
+  
   try {
     const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
     
@@ -33,11 +49,10 @@ async function logToCloudWatch(message, level = 'INFO', context = {}, streamName
       }]
     }).promise();
     
-    console.log(`${level} logged to CloudWatch:`, message);
+    console.log(`${level} successfully logged to CloudWatch:`, message);
   } catch (err) {
-    console.log('Failed to log to CloudWatch:', err);
-    // Fallback: log to console
-    console.log(`${level} (fallback):`, message, context);
+    console.warn('Failed to log to CloudWatch (using console fallback):', err);
+    // Error already logged to console above, no need to re-log
   }
 }
 
