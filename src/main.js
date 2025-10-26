@@ -7,7 +7,7 @@ import { createVuetify } from 'vuetify';
 import * as components from 'vuetify/components';
 import * as directives from 'vuetify/directives';
 
-// pages
+// pages // yes
 
 import IndexHome from "@/pages/IndexHome.vue";
 import BoardPage from "@/pages/BoardPage.vue";
