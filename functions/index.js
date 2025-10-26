@@ -115,7 +115,7 @@ exports.removeAdmin = functions.https.onCall( (data, context) => {
     if (!uid) {
         return {message: "Please pass a UID to the function"};
     }
-    return admin.auth().setCustomUserClaims(uid, {admin: true}).then(() => {
+    return admin.auth().setCustomUserClaims(uid, {admin: false}).then(() => {
         return {message: "User removed as admin"};
     });
 });
