@@ -6,12 +6,26 @@
 import AWS from 'aws-sdk';
 import { cloudWatchConfig } from '../config/cloudwatch';
 
-// Configure AWS CloudWatch Logs
-const logs = new AWS.CloudWatchLogs({
-  region: cloudWatchConfig.region,
-  accessKeyId: cloudWatchConfig.accessKeyId,
-  secretAccessKey: cloudWatchConfig.secretAccessKey
-});
+// Configure AWS CloudWatch Logs with error handling
+let logs = null;
+let isCloudWatchAvailable = false;
+
+try {
+  // Check if required configuration is available
+  if (cloudWatchConfig.accessKeyId && cloudWatchConfig.secretAccessKey) {
+    logs = new AWS.CloudWatchLogs({
+      region: cloudWatchConfig.region,
+      accessKeyId: cloudWatchConfig.accessKeyId,
+      secretAccessKey: cloudWatchConfig.secretAccessKey
+    });
+    isCloudWatchAvailable = true;
+  } else {
+    console.warn('CloudWatch configuration incomplete. Logging will fall back to console.');
+  }
+} catch (error) {
+  console.warn('Failed to initialize CloudWatch:', error.message);
+  isCloudWatchAvailable = false;
+}
 
 /**
  * Log any message to CloudWatch with specified level
@@ -21,6 +35,14 @@ const logs = new AWS.CloudWatchLogs({
  * @param {string} streamName - Optional custom stream name
  */
 async function logToCloudWatch(message, level = 'INFO', context = {}, streamName = null) {
+  // Always log to console as fallback
+  console.log(`${level} (${isCloudWatchAvailable ? 'CloudWatch' : 'Console-only'}):`, message, context);
+  
+  // If CloudWatch is not available, just return
+  if (!isCloudWatchAvailable || !logs) {
+    return;
+  }
+  
   try {
     const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
     
@@ -33,11 +55,9 @@ async function logToCloudWatch(message, level = 'INFO', context = {}, streamName
       }]
     }).promise();
     
-    console.log(`${level} logged to CloudWatch:`, message);
   } catch (err) {
-    console.log('Failed to log to CloudWatch:', err);
-    // Fallback: log to console
-    console.log(`${level} (fallback):`, message, context);
+    console.warn('Failed to log to CloudWatch (falling back to console):', err.message);
+    // Don't throw the error - just continue with console logging
   }
 }
 

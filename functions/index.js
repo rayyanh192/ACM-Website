@@ -5,7 +5,7 @@ const path = require("path");
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const {firestore} = require("firebase-admin");
-const request = require("request");
+const FormData = require("form-data");
 const moment = require("moment");
 const nodemailer = require("nodemailer");
 // eslint-disable-next-line no-unused-vars
@@ -115,7 +115,7 @@ exports.removeAdmin = functions.https.onCall( (data, context) => {
     if (!uid) {
         return {message: "Please pass a UID to the function"};
     }
-    return admin.auth().setCustomUserClaims(uid, {admin: true}).then(() => {
+    return admin.auth().setCustomUserClaims(uid, {admin: false}).then(() => {
         return {message: "User removed as admin"};
     });
 });
@@ -227,27 +227,49 @@ async function sendEventMessages(discordWebhook /*,slackBotToken, slackAppToken,
         // }
 
         // Send message to Discord
-        let formdata = {
-            "content": discordTitle + messageBody,
-        };
         if (hasFlyer) {
-            formdata = {
-                ...formdata,
-                "flyer": {
-                    "value": flyer[0],
-                    "options": {
-                        "filename": "flyer.png",
-                        "contentType": null,
-        }}};
-}
-        await request({
-            "method": "POST",
-            "url": discordWebhook,
-            "formData": formdata,
-            }, function(error, response) {
-            if (error) throw new Error(error);
-                console.log(response.body);
-        });
+            const formData = new FormData();
+            formData.append("content", discordTitle + messageBody);
+            formData.append("file", flyer[0], "flyer.png");
+            
+            try {
+                const response = await fetch(discordWebhook, {
+                    method: "POST",
+                    body: formData,
+                    headers: formData.getHeaders()
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Discord webhook failed: ${response.status} ${response.statusText}`);
+                }
+                
+                console.log("Discord message sent successfully");
+            } catch (error) {
+                console.error("Error sending Discord message:", error);
+                throw error;
+            }
+        } else {
+            try {
+                const response = await fetch(discordWebhook, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        content: discordTitle + messageBody
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Discord webhook failed: ${response.status} ${response.statusText}`);
+                }
+                
+                console.log("Discord message sent successfully");
+            } catch (error) {
+                console.error("Error sending Discord message:", error);
+                throw error;
+            }
+        }
         // await slackResult;
     }
     return "done";
@@ -290,7 +312,7 @@ function formatDateTime(event) {
     // If a start date is provided but an end date isn't, return the start date:
     // Format: Oct 1st 5:45 pm
     if (event.startDate && !event.endDate) {
-      return moment(event.startDate.toDate()).tz("America/Los Angeles").format("MMM Do YYYY, h:mm a");
+      return moment(event.startDate.toDate()).tz("America/Los_Angeles").format("MMM Do YYYY, h:mm a");
     }
     // Format the start and end as dates. Ex: Oct 1st
     const startDate = moment(event.startDate.toDate()).tz("America/Los_Angeles").format("MMM Do, YYYY,");
