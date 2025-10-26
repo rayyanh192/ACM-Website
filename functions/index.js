@@ -93,7 +93,7 @@ return {uid: uid};
     });
 });
 
-exports.addAdmin = functions.https.onCall((data, context) => {
+exports.addAdmin = functions.https.onCall(async (data, context) => {
     const uid = data.uid;
     const isAdmin = context.auth.token.admin || false;
     if (!isAdmin) {
@@ -102,11 +102,27 @@ exports.addAdmin = functions.https.onCall((data, context) => {
     if (!uid) {
         return {message: "Please pass a UID to the function"};
     }
-    return admin.auth().setCustomUserClaims(uid, {admin: true}).then(() => {
-        return {message: "User added as admin"};
-    });
+    try {
+        await admin.auth().setCustomUserClaims(uid, {admin: true});
+        // Verify the admin status was actually set
+        const userRecord = await admin.auth().getUser(uid);
+        const isNowAdmin = userRecord.customClaims?.admin || false;
+        if (!isNowAdmin) {
+            throw new Error("Failed to set admin privileges");
+        }
+        return {
+            message: "User added as admin",
+            uid: userRecord.uid,
+            email: userRecord.email,
+            displayName: userRecord.displayName,
+            claims: userRecord.customClaims,
+        };
+    } catch (error) {
+        console.error("Error adding admin:", error);
+        return {message: "Failed to add admin privileges", error: error.message};
+    }
 });
-exports.removeAdmin = functions.https.onCall( (data, context) => {
+exports.removeAdmin = functions.https.onCall( async (data, context) => {
     const uid = data.uid;
     const isAdmin = context.auth.token.admin || false;
     if (!isAdmin) {
@@ -115,9 +131,25 @@ exports.removeAdmin = functions.https.onCall( (data, context) => {
     if (!uid) {
         return {message: "Please pass a UID to the function"};
     }
-    return admin.auth().setCustomUserClaims(uid, {admin: true}).then(() => {
-        return {message: "User removed as admin"};
-    });
+    try {
+        await admin.auth().setCustomUserClaims(uid, {admin: false});
+        // Verify the admin status was actually removed
+        const userRecord = await admin.auth().getUser(uid);
+        const isStillAdmin = userRecord.customClaims?.admin || false;
+        if (isStillAdmin) {
+            throw new Error("Failed to remove admin privileges");
+        }
+        return {
+            message: "User removed as admin",
+            uid: userRecord.uid,
+            email: userRecord.email,
+            displayName: userRecord.displayName,
+            claims: userRecord.customClaims,
+        };
+    } catch (error) {
+        console.error("Error removing admin:", error);
+        return {message: "Failed to remove admin privileges", error: error.message};
+    }
 });
 exports.getEventAttendance = functions.https.onCall( async (data, context) => {
     const eventId = data.id;
@@ -129,11 +161,18 @@ exports.getEventAttendance = functions.https.onCall( async (data, context) => {
         return {message: "Please pass an event id to the function"};
     }
 
-    const regRef = firestore().collection("registrations");
-
-    const registrations = await regRef.where("event", "==", eventId).count().get();
-
-    return registrations.data().count;
+    try {
+        const regRef = firestore().collection("registrations");
+        const registrations = await regRef.where("event", "==", eventId).count().get();
+        return {
+            eventId: eventId,
+            count: registrations.data().count,
+            message: "Event attendance retrieved successfully"
+        };
+    } catch (error) {
+        console.error("Error getting event attendance:", error);
+        return {message: "Failed to retrieve event attendance", error: error.message};
+    }
 });
 
 exports.getUserAttendance = functions.https.onCall( async (data, context) => {
@@ -142,11 +181,22 @@ exports.getUserAttendance = functions.https.onCall( async (data, context) => {
     if (!auth) {
         return {message: "You must be logged in to call this function", code: 401};
     }
+    if (!userId) {
+        return {message: "Please pass a user id to the function"};
+    }
 
-    const regRef = firestore().collection("registrations");
-
-    const attRef = await regRef.where("uid", "==", userId).count().get();
-    return attRef.data().count;
+    try {
+        const regRef = firestore().collection("registrations");
+        const attRef = await regRef.where("uid", "==", userId).count().get();
+        return {
+            userId: userId,
+            count: attRef.data().count,
+            message: "User attendance retrieved successfully"
+        };
+    } catch (error) {
+        console.error("Error getting user attendance:", error);
+        return {message: "Failed to retrieve user attendance", error: error.message};
+    }
 });
 
 /* eslint-disable */
@@ -290,7 +340,7 @@ function formatDateTime(event) {
     // If a start date is provided but an end date isn't, return the start date:
     // Format: Oct 1st 5:45 pm
     if (event.startDate && !event.endDate) {
-      return moment(event.startDate.toDate()).tz("America/Los Angeles").format("MMM Do YYYY, h:mm a");
+      return moment(event.startDate.toDate()).tz("America/Los_Angeles").format("MMM Do YYYY, h:mm a");
     }
     // Format the start and end as dates. Ex: Oct 1st
     const startDate = moment(event.startDate.toDate()).tz("America/Los_Angeles").format("MMM Do, YYYY,");
