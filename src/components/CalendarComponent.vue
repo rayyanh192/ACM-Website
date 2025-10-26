@@ -66,6 +66,7 @@ import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import { defineComponent } from "vue";
+import httpClient from '@/utils/httpClient';
 // import EventList from "@/components/EventList";
 export default defineComponent({
   name: "CalendarComponent",
@@ -126,8 +127,9 @@ export default defineComponent({
       const timeMin = pastDate.toJSON();
       const timeMax = futureDate.toJSON();
 
-      const res = await fetch(
-        `https://www.googleapis.com/calendar/v3/calendars/en.usa%23holiday%40group.v.calendar.google.com/events?key=${auth}&timeMin=${timeMin}&timeMax=${timeMax}`
+      const res = await httpClient.get(
+        `https://www.googleapis.com/calendar/v3/calendars/en.usa%23holiday%40group.v.calendar.google.com/events?key=${auth}&timeMin=${timeMin}&timeMax=${timeMax}`,
+        { timeout: 10000 } // 10 second timeout for Google Calendar API
       );
       const data = await res.json();
       for (let event of data.items) {
@@ -139,8 +141,9 @@ export default defineComponent({
         });
       }
 
-      const acmEventsResponse = await fetch(
-        `https://clients6.google.com/calendar/v3/calendars/santaclara.acm@gmail.com/events?calendarId=santaclara.acm%40gmail.com&singleEvents=true&timeZone=America%2FLos_Angeles&maxAttendees=1&maxResults=250&sanitizeHtml=true&timeMin=${timeMin}&timeMax=${timeMax}&key=${auth}`
+      const acmEventsResponse = await httpClient.get(
+        `https://clients6.google.com/calendar/v3/calendars/santaclara.acm@gmail.com/events?calendarId=santaclara.acm%40gmail.com&singleEvents=true&timeZone=America%2FLos_Angeles&maxAttendees=1&maxResults=250&sanitizeHtml=true&timeMin=${timeMin}&timeMax=${timeMax}&key=${auth}`,
+        { timeout: 10000 } // 10 second timeout for Google Calendar API
       );
       const acmEventsData = await acmEventsResponse.json();
       for (let event of acmEventsData.items) {
