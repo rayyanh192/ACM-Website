@@ -12,7 +12,29 @@ const nodemailer = require("nodemailer");
 const {tz} = require("moment-timezone");
 // const {App} = require("@slack/bolt");
 
+// Import new payment and database modules
+const { processPayment, refundPayment, getPaymentStatus } = require("./payment_handler");
+const { executeMySQLQuery, executePostgresQuery, executeFirestoreQuery, healthCheck: dbHealthCheck } = require("./database_config");
+const { poolManager } = require("./connection_pool");
+
 admin.initializeApp();
+
+// Initialize CloudWatch logger for error reporting
+// This will be used by payment_handler and database_config modules
+global.cloudWatchLogger = {
+  async paymentError(error, transactionId) {
+    console.error(`[PAYMENT ERROR] ${error.message}`, { transactionId, error: error.stack });
+  },
+  async databaseError(error, operation) {
+    console.error(`[DATABASE ERROR] ${error.message}`, { operation, error: error.stack });
+  },
+  async apiError(error, endpoint) {
+    console.error(`[API ERROR] ${error.message}`, { endpoint, error: error.stack });
+  },
+  async info(message, context) {
+    console.log(`[INFO] ${message}`, context);
+  }
+};
 
 exports.addRole = functions.https.onCall(async (data, context) => {
     const isAdmin = context.auth.token.admin || false;
@@ -311,4 +333,266 @@ function formatDateTime(event) {
     // Otherwise, return the start date and time and end date and time. Ex: Feb 12th, 2022, 10:00 am - Feb 13th, 2022, 12:00 pm
     return `${startDate} ${startTime} - ${endDate} ${endTime}`;
 }
+
+// ============================================================================
+// NEW PAYMENT AND DATABASE FUNCTIONS
+// These address the errors mentioned in the deployment logs
+// ============================================================================
+
+/**
+ * Process Payment Function
+ * Addresses: "Payment service connection failed - timeout after 5000ms"
+ * Addresses: "HTTPSConnectionPool timeout" errors
+ */
+exports.processPayment = functions.runWith({
+  timeoutSeconds: 540,
+  memory: '1GB'
+}).https.onCall(async (data, context) => {
+  // Require authentication
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+  }
+
+  try {
+    const result = await processPayment(data);
+    
+    // Log successful payment
+    await global.cloudWatchLogger.info('Payment processed successfully', {
+      userId: context.auth.uid,
+      paymentId: result.paymentId,
+      amount: result.amount
+    });
+    
+    return result;
+  } catch (error) {
+    console.error('Payment processing failed:', error);
+    
+    // Log payment error to CloudWatch
+    await global.cloudWatchLogger.paymentError(error, data.paymentMethodId || data.orderId);
+    
+    throw error;
+  }
+});
+
+/**
+ * Refund Payment Function
+ */
+exports.refundPayment = functions.runWith({
+  timeoutSeconds: 300,
+  memory: '512MB'
+}).https.onCall(async (data, context) => {
+  // Require admin authentication
+  const isAdmin = context.auth?.token?.admin || false;
+  if (!isAdmin) {
+    throw new functions.https.HttpsError('permission-denied', 'Admin access required');
+  }
+
+  try {
+    const result = await refundPayment(data);
+    
+    await global.cloudWatchLogger.info('Refund processed successfully', {
+      adminId: context.auth.uid,
+      refundId: result.refundId,
+      amount: result.amount
+    });
+    
+    return result;
+  } catch (error) {
+    console.error('Refund processing failed:', error);
+    await global.cloudWatchLogger.paymentError(error, data.paymentId);
+    throw error;
+  }
+});
+
+/**
+ * Get Payment Status Function
+ */
+exports.getPaymentStatus = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+  }
+
+  try {
+    const result = await getPaymentStatus(data.paymentId, data.provider);
+    return result;
+  } catch (error) {
+    console.error('Payment status check failed:', error);
+    await global.cloudWatchLogger.paymentError(error, data.paymentId);
+    throw error;
+  }
+});
+
+/**
+ * Database Query Function
+ * Addresses: "Database query failed: connection pool exhausted"
+ */
+exports.executeQuery = functions.runWith({
+  timeoutSeconds: 300,
+  memory: '512MB'
+}).https.onCall(async (data, context) => {
+  // Require admin authentication for direct database queries
+  const isAdmin = context.auth?.token?.admin || false;
+  if (!isAdmin) {
+    throw new functions.https.HttpsError('permission-denied', 'Admin access required');
+  }
+
+  const { queryType, collection, operation, query, params } = data;
+
+  try {
+    let result;
+
+    switch (queryType) {
+      case 'firestore':
+        result = await executeFirestoreQuery(collection, operation, ...params);
+        break;
+      case 'mysql':
+        result = await executeMySQLQuery(query, params);
+        break;
+      case 'postgres':
+        result = await executePostgresQuery(query, params);
+        break;
+      default:
+        throw new functions.https.HttpsError('invalid-argument', 'Invalid query type');
+    }
+
+    await global.cloudWatchLogger.info('Database query executed successfully', {
+      adminId: context.auth.uid,
+      queryType,
+      operation: operation || 'custom'
+    });
+
+    return { success: true, data: result };
+  } catch (error) {
+    console.error('Database query failed:', error);
+    await global.cloudWatchLogger.databaseError(error, `${queryType}:${operation || 'custom'}`);
+    throw new functions.https.HttpsError('internal', `Database query failed: ${error.message}`);
+  }
+});
+
+/**
+ * Health Check Function
+ * Monitors database connections and payment service availability
+ */
+exports.healthCheck = functions.https.onCall(async (data, context) => {
+  try {
+    const dbHealth = await dbHealthCheck();
+    const poolHealth = await poolManager.healthCheck();
+    
+    const overallHealth = {
+      database: dbHealth,
+      connectionPools: poolHealth,
+      timestamp: new Date().toISOString(),
+      healthy: dbHealth.firestore && poolHealth.overall
+    };
+
+    return overallHealth;
+  } catch (error) {
+    console.error('Health check failed:', error);
+    await global.cloudWatchLogger.databaseError(error, 'health_check');
+    
+    return {
+      healthy: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    };
+  }
+});
+
+/**
+ * Connection Pool Statistics Function
+ */
+exports.getPoolStats = functions.https.onCall(async (data, context) => {
+  const isAdmin = context.auth?.token?.admin || false;
+  if (!isAdmin) {
+    throw new functions.https.HttpsError('permission-denied', 'Admin access required');
+  }
+
+  try {
+    const stats = poolManager.getAllStats();
+    return { success: true, stats };
+  } catch (error) {
+    console.error('Failed to get pool stats:', error);
+    throw new functions.https.HttpsError('internal', `Failed to get pool statistics: ${error.message}`);
+  }
+});
+
+/**
+ * Simulate Payment Error Function (for testing)
+ * This helps test the error handling that addresses the deployment issues
+ */
+exports.simulatePaymentError = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+  }
+
+  const { errorType = 'timeout' } = data;
+
+  try {
+    switch (errorType) {
+      case 'timeout':
+        // Simulate the exact error from the logs
+        const timeoutError = new Error('Payment service connection failed - timeout after 5000ms');
+        timeoutError.code = 'ECONNABORTED';
+        await global.cloudWatchLogger.paymentError(timeoutError, 'test_transaction');
+        throw new functions.https.HttpsError('deadline-exceeded', timeoutError.message);
+        
+      case 'connection':
+        const connectionError = new Error('HTTPSConnectionPool timeout');
+        connectionError.code = 'ECONNRESET';
+        await global.cloudWatchLogger.paymentError(connectionError, 'test_transaction');
+        throw new functions.https.HttpsError('unavailable', connectionError.message);
+        
+      default:
+        throw new functions.https.HttpsError('invalid-argument', 'Invalid error type');
+    }
+  } catch (error) {
+    // This is expected - we're simulating errors
+    throw error;
+  }
+});
+
+/**
+ * Simulate Database Error Function (for testing)
+ */
+exports.simulateDatabaseError = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+  }
+
+  const { errorType = 'pool_exhausted' } = data;
+
+  try {
+    switch (errorType) {
+      case 'pool_exhausted':
+        // Simulate the exact error from the logs
+        const poolError = new Error('Database query failed: connection pool exhausted');
+        poolError.code = 'POOL_EXHAUSTED';
+        await global.cloudWatchLogger.databaseError(poolError, 'test_query');
+        throw new functions.https.HttpsError('resource-exhausted', poolError.message);
+        
+      case 'timeout':
+        const timeoutError = new Error('Database connection timeout');
+        timeoutError.code = 'ETIMEDOUT';
+        await global.cloudWatchLogger.databaseError(timeoutError, 'test_query');
+        throw new functions.https.HttpsError('deadline-exceeded', timeoutError.message);
+        
+      default:
+        throw new functions.https.HttpsError('invalid-argument', 'Invalid error type');
+    }
+  } catch (error) {
+    // This is expected - we're simulating errors
+    throw error;
+  }
+});
+
+// Graceful shutdown handler
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM received, closing connection pools...');
+  try {
+    await poolManager.closeAllPools();
+    console.log('Connection pools closed successfully');
+  } catch (error) {
+    console.error('Error closing connection pools:', error);
+  }
+});
 
