@@ -115,7 +115,7 @@ exports.removeAdmin = functions.https.onCall( (data, context) => {
     if (!uid) {
         return {message: "Please pass a UID to the function"};
     }
-    return admin.auth().setCustomUserClaims(uid, {admin: true}).then(() => {
+    return admin.auth().setCustomUserClaims(uid, {admin: false}).then(() => {
         return {message: "User removed as admin"};
     });
 });
@@ -285,12 +285,48 @@ exports.sendWelcomeEmail = functions.runWith({secrets: ["mailAppPassword"]})
     }
 });
 
+exports.healthCheck = functions.https.onRequest((req, res) => {
+    // Set CORS headers
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, POST');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    
+    if (req.method === 'OPTIONS') {
+        res.status(204).send('');
+        return;
+    }
+    
+    const health = {
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        services: {
+            firebase: 'operational',
+            functions: 'operational',
+            firestore: 'operational'
+        },
+        version: '1.0.0'
+    };
+    
+    // Test Firestore connection
+    try {
+        firestore().collection('health').doc('test').set({
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+        });
+        health.services.firestore = 'operational';
+    } catch (error) {
+        health.services.firestore = 'error';
+        health.status = 'degraded';
+    }
+    
+    res.status(200).json(health);
+});
+
 function formatDateTime(event) {
     if (!event?.startDate) return "";
     // If a start date is provided but an end date isn't, return the start date:
     // Format: Oct 1st 5:45 pm
     if (event.startDate && !event.endDate) {
-      return moment(event.startDate.toDate()).tz("America/Los Angeles").format("MMM Do YYYY, h:mm a");
+      return moment(event.startDate.toDate()).tz("America/Los_Angeles").format("MMM Do YYYY, h:mm a");
     }
     // Format the start and end as dates. Ex: Oct 1st
     const startDate = moment(event.startDate.toDate()).tz("America/Los_Angeles").format("MMM Do, YYYY,");
