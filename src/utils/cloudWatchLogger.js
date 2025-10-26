@@ -1,17 +1,59 @@
 /**
  * CloudWatch Logger for Vue.js Application
- * Sends errors directly to CloudWatch from the frontend
+ * Sends errors directly to CloudWatch from the frontend with fallback to Firebase Functions
  */
 
 import AWS from 'aws-sdk';
 import { cloudWatchConfig } from '../config/cloudwatch';
 
-// Configure AWS CloudWatch Logs
-const logs = new AWS.CloudWatchLogs({
-  region: cloudWatchConfig.region,
-  accessKeyId: cloudWatchConfig.accessKeyId,
-  secretAccessKey: cloudWatchConfig.secretAccessKey
-});
+// Configure AWS CloudWatch Logs only if credentials are available
+let logs = null;
+if (cloudWatchConfig.isConfigured) {
+  logs = new AWS.CloudWatchLogs({
+    region: cloudWatchConfig.region,
+    accessKeyId: cloudWatchConfig.accessKeyId,
+    secretAccessKey: cloudWatchConfig.secretAccessKey
+  });
+}
+
+/**
+ * Fallback logging via Firebase Function
+ * @param {string} message - Message to log
+ * @param {string} level - Log level
+ * @param {Object} context - Additional context information
+ */
+async function logViaFirebaseFunction(message, level, context) {
+  try {
+    const logData = {
+      timestamp: Date.now(),
+      level: level,
+      message: message,
+      context: {
+        url: window.location.href,
+        userAgent: navigator.userAgent,
+        ...context
+      }
+    };
+
+    const response = await fetch('https://us-central1-acm-new.cloudfunctions.net/logError', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(logData)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Firebase function error: ${response.status}`);
+    }
+
+    console.log(`${level} logged via Firebase function:`, message);
+    return await response.json();
+  } catch (error) {
+    console.warn('Firebase function logging failed:', error.message);
+    throw error;
+  }
+}
 
 /**
  * Log any message to CloudWatch with specified level
@@ -21,23 +63,34 @@ const logs = new AWS.CloudWatchLogs({
  * @param {string} streamName - Optional custom stream name
  */
 async function logToCloudWatch(message, level = 'INFO', context = {}, streamName = null) {
+  const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
+  
+  // Try direct CloudWatch logging first if configured
+  if (logs && cloudWatchConfig.isConfigured) {
+    try {
+      await logs.putLogEvents({
+        logGroupName: cloudWatchConfig.logGroupName,
+        logStreamName: streamName || cloudWatchConfig.logStreamName,
+        logEvents: [{
+          timestamp: Date.now(),
+          message: logMessage
+        }]
+      }).promise();
+      
+      console.log(`${level} logged to CloudWatch:`, message);
+      return;
+    } catch (err) {
+      console.warn('Direct CloudWatch logging failed, trying Firebase function:', err.message);
+    }
+  }
+  
+  // Fallback to Firebase function
   try {
-    const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
-    
-    await logs.putLogEvents({
-      logGroupName: cloudWatchConfig.logGroupName,
-      logStreamName: streamName || cloudWatchConfig.logStreamName,
-      logEvents: [{
-        timestamp: Date.now(),
-        message: logMessage
-      }]
-    }).promise();
-    
-    console.log(`${level} logged to CloudWatch:`, message);
-  } catch (err) {
-    console.log('Failed to log to CloudWatch:', err);
-    // Fallback: log to console
-    console.log(`${level} (fallback):`, message, context);
+    await logViaFirebaseFunction(message, level, context);
+  } catch (fallbackError) {
+    // Final fallback: log to console only
+    console.warn('All logging methods failed, logging to console only');
+    console.log(`${level} (console fallback):`, message, context);
   }
 }
 

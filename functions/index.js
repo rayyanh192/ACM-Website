@@ -8,6 +8,7 @@ const {firestore} = require("firebase-admin");
 const request = require("request");
 const moment = require("moment");
 const nodemailer = require("nodemailer");
+const AWS = require("aws-sdk");
 // eslint-disable-next-line no-unused-vars
 const {tz} = require("moment-timezone");
 // const {App} = require("@slack/bolt");
@@ -115,7 +116,7 @@ exports.removeAdmin = functions.https.onCall( (data, context) => {
     if (!uid) {
         return {message: "Please pass a UID to the function"};
     }
-    return admin.auth().setCustomUserClaims(uid, {admin: true}).then(() => {
+    return admin.auth().setCustomUserClaims(uid, {admin: false}).then(() => {
         return {message: "User removed as admin"};
     });
 });
@@ -311,4 +312,83 @@ function formatDateTime(event) {
     // Otherwise, return the start date and time and end date and time. Ex: Feb 12th, 2022, 10:00 am - Feb 13th, 2022, 12:00 pm
     return `${startDate} ${startTime} - ${endDate} ${endTime}`;
 }
+
+// CloudWatch logging endpoint for frontend errors
+exports.logError = functions.runWith({secrets: ["cloudWatchSecrets"]})
+.https.onRequest(async (req, res) => {
+    // Set CORS headers
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    
+    // Handle preflight requests
+    if (req.method === 'OPTIONS') {
+        res.status(204).send('');
+        return;
+    }
+    
+    if (req.method !== 'POST') {
+        res.status(405).json({ error: 'Method not allowed' });
+        return;
+    }
+    
+    try {
+        const logData = req.body;
+        
+        // Validate required fields
+        if (!logData.message) {
+            res.status(400).json({ error: 'Message is required' });
+            return;
+        }
+        
+        // Get CloudWatch configuration from secrets
+        let cloudWatchConfig = {};
+        try {
+            const secretsString = process.env.cloudWatchSecrets;
+            if (secretsString) {
+                const secretStrings = secretsString.replace(/\\"/g, '"');
+                cloudWatchConfig = JSON.parse(secretStrings);
+            }
+        } catch (parseError) {
+            console.warn('Failed to parse CloudWatch secrets, using environment variables');
+        }
+        
+        // Configure AWS CloudWatch with fallback to environment variables
+        const logs = new AWS.CloudWatchLogs({
+            region: cloudWatchConfig.AWS_REGION || process.env.AWS_REGION || 'us-east-1',
+            accessKeyId: cloudWatchConfig.AWS_ACCESS_KEY_ID || process.env.AWS_ACCESS_KEY_ID,
+            secretAccessKey: cloudWatchConfig.AWS_SECRET_ACCESS_KEY || process.env.AWS_SECRET_ACCESS_KEY
+        });
+        
+        const logGroupName = cloudWatchConfig.LOG_GROUP_NAME || process.env.LOG_GROUP_NAME || 'acm-website-logs';
+        const logStreamName = cloudWatchConfig.LOG_STREAM_NAME || process.env.LOG_STREAM_NAME || 'error-stream';
+        
+        // Format log message
+        const logMessage = `${logData.level || 'ERROR'}: ${logData.message} - Context: ${JSON.stringify(logData.context || {})}`;
+        
+        // Send to CloudWatch
+        await logs.putLogEvents({
+            logGroupName: logGroupName,
+            logStreamName: logStreamName,
+            logEvents: [{
+                timestamp: logData.timestamp || Date.now(),
+                message: logMessage
+            }]
+        }).promise();
+        
+        console.log('Successfully logged to CloudWatch:', logData.message);
+        res.status(200).json({ success: true, message: 'Log sent to CloudWatch' });
+        
+    } catch (error) {
+        console.error('Failed to log to CloudWatch:', error);
+        
+        // Still return success to prevent frontend errors, but log the failure
+        console.error('CloudWatch logging failed for message:', req.body?.message);
+        res.status(200).json({ 
+            success: false, 
+            message: 'Failed to send to CloudWatch, logged locally',
+            error: error.message 
+        });
+    }
+});
 
