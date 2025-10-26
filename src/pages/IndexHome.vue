@@ -45,7 +45,7 @@
               outlined
               height="60px"
               width="230px"
-              @click="scrolTo(link.to)"
+              @click="scrollTo(link.to)"
             >
               {{ link.title }}
             </v-btn>
