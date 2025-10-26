@@ -6,12 +6,27 @@
 import AWS from 'aws-sdk';
 import { cloudWatchConfig } from '../config/cloudwatch';
 
-// Configure AWS CloudWatch Logs
-const logs = new AWS.CloudWatchLogs({
-  region: cloudWatchConfig.region,
-  accessKeyId: cloudWatchConfig.accessKeyId,
-  secretAccessKey: cloudWatchConfig.secretAccessKey
-});
+// Configure AWS CloudWatch Logs only if credentials are available
+let logs = null;
+let isCloudWatchEnabled = false;
+
+try {
+  if (cloudWatchConfig.isConfigured()) {
+    logs = new AWS.CloudWatchLogs({
+      region: cloudWatchConfig.region,
+      accessKeyId: cloudWatchConfig.accessKeyId,
+      secretAccessKey: cloudWatchConfig.secretAccessKey
+    });
+    isCloudWatchEnabled = true;
+    console.log('CloudWatch logging enabled');
+  } else {
+    console.warn('CloudWatch credentials not configured. Logging will fall back to console only.');
+    console.log('CloudWatch config status:', cloudWatchConfig.getStatus());
+  }
+} catch (error) {
+  console.error('Failed to initialize CloudWatch:', error);
+  isCloudWatchEnabled = false;
+}
 
 /**
  * Log any message to CloudWatch with specified level
@@ -24,18 +39,22 @@ async function logToCloudWatch(message, level = 'INFO', context = {}, streamName
   try {
     const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
     
-    await logs.putLogEvents({
-      logGroupName: cloudWatchConfig.logGroupName,
-      logStreamName: streamName || cloudWatchConfig.logStreamName,
-      logEvents: [{
-        timestamp: Date.now(),
-        message: logMessage
-      }]
-    }).promise();
+    // Always log to console for debugging
+    console.log(`${level} (${isCloudWatchEnabled ? 'CloudWatch' : 'Console only'}):`, message, context);
     
-    console.log(`${level} logged to CloudWatch:`, message);
+    // Only attempt CloudWatch logging if properly configured
+    if (isCloudWatchEnabled && logs) {
+      await logs.putLogEvents({
+        logGroupName: cloudWatchConfig.logGroupName,
+        logStreamName: streamName || cloudWatchConfig.logStreamName,
+        logEvents: [{
+          timestamp: Date.now(),
+          message: logMessage
+        }]
+      }).promise();
+    }
   } catch (err) {
-    console.log('Failed to log to CloudWatch:', err);
+    console.warn('Failed to log to CloudWatch (falling back to console):', err);
     // Fallback: log to console
     console.log(`${level} (fallback):`, message, context);
   }
@@ -165,6 +184,29 @@ export const cloudWatchLogger = {
       operation,
       errorCode: error.code || 'unknown'
     });
+  },
+
+  // Utility methods for debugging and status checking
+  getStatus() {
+    return {
+      isEnabled: isCloudWatchEnabled,
+      config: cloudWatchConfig.getStatus(),
+      hasLogs: !!logs
+    };
+  },
+
+  // Test CloudWatch connectivity
+  async testConnection() {
+    if (!isCloudWatchEnabled) {
+      return { success: false, error: 'CloudWatch not configured' };
+    }
+    
+    try {
+      await this.info('CloudWatch connection test', { test: true });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
   }
 };
 

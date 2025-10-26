@@ -115,7 +115,7 @@ exports.removeAdmin = functions.https.onCall( (data, context) => {
     if (!uid) {
         return {message: "Please pass a UID to the function"};
     }
-    return admin.auth().setCustomUserClaims(uid, {admin: true}).then(() => {
+    return admin.auth().setCustomUserClaims(uid, {admin: false}).then(() => {
         return {message: "User removed as admin"};
     });
 });
@@ -290,7 +290,7 @@ function formatDateTime(event) {
     // If a start date is provided but an end date isn't, return the start date:
     // Format: Oct 1st 5:45 pm
     if (event.startDate && !event.endDate) {
-      return moment(event.startDate.toDate()).tz("America/Los Angeles").format("MMM Do YYYY, h:mm a");
+      return moment(event.startDate.toDate()).tz("America/Los_Angeles").format("MMM Do YYYY, h:mm a");
     }
     // Format the start and end as dates. Ex: Oct 1st
     const startDate = moment(event.startDate.toDate()).tz("America/Los_Angeles").format("MMM Do, YYYY,");
