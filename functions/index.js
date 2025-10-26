@@ -14,6 +14,41 @@ const {tz} = require("moment-timezone");
 
 admin.initializeApp();
 
+// Enhanced database connection management for Firebase Functions
+const connectionConfig = {
+  maxRetries: 3,
+  retryDelay: 1000,
+  timeout: 30000,
+  maxConcurrentOperations: 20 // Higher limit for server-side operations
+};
+
+// Database operation wrapper with retry logic
+async function executeWithRetry(operation, context = 'unknown', retries = connectionConfig.maxRetries) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      // Set timeout for the operation
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => {
+          reject(new Error(`Database operation timeout after ${connectionConfig.timeout}ms`));
+        }, connectionConfig.timeout);
+      });
+
+      const result = await Promise.race([operation(), timeoutPromise]);
+      return result;
+    } catch (error) {
+      console.warn(`Database operation failed (${context}, attempt ${attempt}/${retries}):`, error);
+      
+      if (attempt === retries) {
+        throw new Error(`Database operation failed after ${retries} attempts: ${error.message}`);
+      }
+      
+      // Exponential backoff
+      const delay = connectionConfig.retryDelay * Math.pow(2, attempt - 1);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+
 exports.addRole = functions.https.onCall(async (data, context) => {
     const isAdmin = context.auth.token.admin || false;
     if (!isAdmin) {
@@ -25,19 +60,36 @@ exports.addRole = functions.https.onCall(async (data, context) => {
         return {message: "Please pass a UID to the function"};
     }
 
-    const currentClaims = (await admin.auth().getUser(uid)).customClaims || {};
-    const roles = currentClaims?.roles || [];
-    roles.push(role);
-    currentClaims.roles = roles;
+    try {
+        const currentClaims = await executeWithRetry(
+            () => admin.auth().getUser(uid).then(user => user.customClaims || {}),
+            'get_user_claims'
+        );
+        
+        const roles = currentClaims?.roles || [];
+        roles.push(role);
+        currentClaims.roles = roles;
 
-    await admin.auth().setCustomUserClaims(uid, currentClaims);
-    const userRecord = await admin.auth().getUser(uid);
-    return {
-        uid: userRecord.uid,
-        email: userRecord.email,
-        displayName: userRecord.displayName,
-        claims: userRecord.customClaims,
-    };
+        await executeWithRetry(
+            () => admin.auth().setCustomUserClaims(uid, currentClaims),
+            'set_custom_claims'
+        );
+        
+        const userRecord = await executeWithRetry(
+            () => admin.auth().getUser(uid),
+            'get_user_record'
+        );
+        
+        return {
+            uid: userRecord.uid,
+            email: userRecord.email,
+            displayName: userRecord.displayName,
+            claims: userRecord.customClaims,
+        };
+    } catch (error) {
+        console.error('Error in addRole function:', error);
+        throw new functions.https.HttpsError('internal', `Failed to add role: ${error.message}`);
+    }
 });
 
 exports.removeRole = functions.https.onCall(async (data, context) => {
@@ -50,24 +102,41 @@ exports.removeRole = functions.https.onCall(async (data, context) => {
     if (!uid) {
         return {message: "Please pass a UID to the function"};
     }
-    const currentClaims = (await admin.auth().getUser(uid)).customClaims;
+    
+    try {
+        const currentClaims = await executeWithRetry(
+            () => admin.auth().getUser(uid).then(user => user.customClaims),
+            'get_user_claims'
+        );
 
-    const roles = currentClaims?.roles ?? [];
-    console.log("INDEX", roles.indexOf(role));
-    roles.splice(roles.indexOf(role), 1);
-    currentClaims.roles = roles;
+        const roles = currentClaims?.roles ?? [];
+        console.log("INDEX", roles.indexOf(role));
+        roles.splice(roles.indexOf(role), 1);
+        currentClaims.roles = roles;
 
-    await admin.auth().setCustomUserClaims(uid, currentClaims);
-    const userRecord = await admin.auth().getUser(uid);
-    return {
-        uid: userRecord.uid,
-        email: userRecord.email,
-        displayName: userRecord.displayName,
-        claims: userRecord.customClaims,
-    };
+        await executeWithRetry(
+            () => admin.auth().setCustomUserClaims(uid, currentClaims),
+            'set_custom_claims'
+        );
+        
+        const userRecord = await executeWithRetry(
+            () => admin.auth().getUser(uid),
+            'get_user_record'
+        );
+        
+        return {
+            uid: userRecord.uid,
+            email: userRecord.email,
+            displayName: userRecord.displayName,
+            claims: userRecord.customClaims,
+        };
+    } catch (error) {
+        console.error('Error in removeRole function:', error);
+        throw new functions.https.HttpsError('internal', `Failed to remove role: ${error.message}`);
+    }
 });
 
-exports.searchUsers = functions.https.onCall((data, context) => {
+exports.searchUsers = functions.https.onCall(async (data, context) => {
     const isAdmin = context.auth.token.admin || false;
     if (!isAdmin) {
         return {error: "You must be an admin to search users"};
@@ -76,12 +145,17 @@ exports.searchUsers = functions.https.onCall((data, context) => {
         return {error: "Please pass an array of UIDs to the function"};
     }
     const uids = data.uids.map((uid) => {
-return {uid: uid};
-});
+        return {uid: uid};
+    });
 
     console.log(uids);
 
-    return admin.auth().getUsers(uids).then((records) => {
+    try {
+        const records = await executeWithRetry(
+            () => admin.auth().getUsers(uids),
+            'get_users'
+        );
+        
         return {users: records.users.map((userRecord) => {
             return {
                 uid: userRecord.uid,
@@ -90,10 +164,13 @@ return {uid: uid};
                 claims: userRecord.customClaims,
             };
         })};
-    });
+    } catch (error) {
+        console.error('Error in searchUsers function:', error);
+        throw new functions.https.HttpsError('internal', `Failed to search users: ${error.message}`);
+    }
 });
 
-exports.addAdmin = functions.https.onCall((data, context) => {
+exports.addAdmin = functions.https.onCall(async (data, context) => {
     const uid = data.uid;
     const isAdmin = context.auth.token.admin || false;
     if (!isAdmin) {
@@ -102,11 +179,21 @@ exports.addAdmin = functions.https.onCall((data, context) => {
     if (!uid) {
         return {message: "Please pass a UID to the function"};
     }
-    return admin.auth().setCustomUserClaims(uid, {admin: true}).then(() => {
+    
+    try {
+        await executeWithRetry(
+            () => admin.auth().setCustomUserClaims(uid, {admin: true}),
+            'set_admin_claims'
+        );
+        
         return {message: "User added as admin"};
-    });
+    } catch (error) {
+        console.error('Error in addAdmin function:', error);
+        throw new functions.https.HttpsError('internal', `Failed to add admin: ${error.message}`);
+    }
 });
-exports.removeAdmin = functions.https.onCall( (data, context) => {
+
+exports.removeAdmin = functions.https.onCall(async (data, context) => {
     const uid = data.uid;
     const isAdmin = context.auth.token.admin || false;
     if (!isAdmin) {
@@ -115,11 +202,21 @@ exports.removeAdmin = functions.https.onCall( (data, context) => {
     if (!uid) {
         return {message: "Please pass a UID to the function"};
     }
-    return admin.auth().setCustomUserClaims(uid, {admin: true}).then(() => {
+    
+    try {
+        await executeWithRetry(
+            () => admin.auth().setCustomUserClaims(uid, {admin: false}),
+            'remove_admin_claims'
+        );
+        
         return {message: "User removed as admin"};
-    });
+    } catch (error) {
+        console.error('Error in removeAdmin function:', error);
+        throw new functions.https.HttpsError('internal', `Failed to remove admin: ${error.message}`);
+    }
 });
-exports.getEventAttendance = functions.https.onCall( async (data, context) => {
+
+exports.getEventAttendance = functions.https.onCall(async (data, context) => {
     const eventId = data.id;
     const isAdmin = context.auth.token.admin || false;
     if (!isAdmin) {
@@ -129,24 +226,39 @@ exports.getEventAttendance = functions.https.onCall( async (data, context) => {
         return {message: "Please pass an event id to the function"};
     }
 
-    const regRef = firestore().collection("registrations");
+    try {
+        const regRef = firestore().collection("registrations");
+        const registrations = await executeWithRetry(
+            () => regRef.where("event", "==", eventId).count().get(),
+            'get_event_attendance'
+        );
 
-    const registrations = await regRef.where("event", "==", eventId).count().get();
-
-    return registrations.data().count;
+        return registrations.data().count;
+    } catch (error) {
+        console.error('Error in getEventAttendance function:', error);
+        throw new functions.https.HttpsError('internal', `Failed to get event attendance: ${error.message}`);
+    }
 });
 
-exports.getUserAttendance = functions.https.onCall( async (data, context) => {
+exports.getUserAttendance = functions.https.onCall(async (data, context) => {
     const userId = data.id;
     const auth = context.auth;
     if (!auth) {
         return {message: "You must be logged in to call this function", code: 401};
     }
 
-    const regRef = firestore().collection("registrations");
-
-    const attRef = await regRef.where("uid", "==", userId).count().get();
-    return attRef.data().count;
+    try {
+        const regRef = firestore().collection("registrations");
+        const attRef = await executeWithRetry(
+            () => regRef.where("uid", "==", userId).count().get(),
+            'get_user_attendance'
+        );
+        
+        return attRef.data().count;
+    } catch (error) {
+        console.error('Error in getUserAttendance function:', error);
+        throw new functions.https.HttpsError('internal', `Failed to get user attendance: ${error.message}`);
+    }
 });
 
 /* eslint-disable */
@@ -181,107 +293,140 @@ exports.sendEventNotificationsTest = functions.runWith({secrets: ["notificationS
 });
     
 async function sendEventMessages(discordWebhook /*,slackBotToken, slackAppToken,slackSigningSecret, slackChannel*/){
-    const eventRef = firestore().collection("events");
+    try {
+        const eventRef = firestore().collection("events");
 
-    // Initialize Slack App
-    // const app = new App({
-    //     token: slackBotToken,
-    //     signingSecret: slackSigningSecret,
-    //     socketMode: true,
-    //     appToken: slackAppToken,
-    // });
-    // Get upcoming events
-    let workshop = await eventRef.where("startDate", ">=", admin.firestore.Timestamp.fromMillis(new Date().getTime() + 60 * 60 * 7 * 1000)).where("startDate", "<=", (admin.firestore.Timestamp.fromMillis(new Date().getTime() + 60 * 60 * (24+7) * 1000))).orderBy("startDate", "asc").get();// eslint-disable-line
+        // Initialize Slack App
+        // const app = new App({
+        //     token: slackBotToken,
+        //     signingSecret: slackSigningSecret,
+        //     socketMode: true,
+        //     appToken: slackAppToken,
+        // });
+        
+        // Get upcoming events with retry logic
+        let workshop = await executeWithRetry(
+            () => eventRef.where("startDate", ">=", admin.firestore.Timestamp.fromMillis(new Date().getTime() + 60 * 60 * 7 * 1000))
+                          .where("startDate", "<=", (admin.firestore.Timestamp.fromMillis(new Date().getTime() + 60 * 60 * (24+7) * 1000)))
+                          .orderBy("startDate", "asc")
+                          .get(),
+            'get_upcoming_events'
+        );
 
-    if (workshop.empty) {
-        return "No Data";
-    }
-
-    // Send Messages
-    for (const doc of workshop.docs) {
-        var hasFlyer = false;
-        if (doc.data().flyer) {
-            hasFlyer = true;
-            var flyer = await admin.storage().bucket().file(doc.data().flyer).download();
+        if (workshop.empty) {
+            return "No Data";
         }
 
-        // const slackTitle = "*Event Happening Tomorrow! " + doc.data().title + "*";
-        const discordTitle = "<@&1074916982748614758> **Event Happening Tomorrow! " + doc.data().title + "**";
+        // Send Messages
+        for (const doc of workshop.docs) {
+            var hasFlyer = false;
+            if (doc.data().flyer) {
+                hasFlyer = true;
+                var flyer = await executeWithRetry(
+                    () => admin.storage().bucket().file(doc.data().flyer).download(),
+                    'download_flyer'
+                );
+            }
 
-        const messageBody = "\n" + formatDateTime(doc.data()) +
-        "\n" + doc.data().description;
+            // const slackTitle = "*Event Happening Tomorrow! " + doc.data().title + "*";
+            const discordTitle = "<@&1074916982748614758> **Event Happening Tomorrow! " + doc.data().title + "**";
 
-        // Send message to Slack
-        // const channel = slackChannel;
-        // if (hasFlyer) {
-        //     var slackResult = await app.client.files.upload({
-        //         channels: channel,
-        //         initial_comment: slackTitle + messageBody,
-        //         file: flyer[0],
-        //     });
-        // } else {
-        //     var slackResult = await app.client.chat.postMessage({
-        //         channels: channel,
-        //         text: slackTitle + messageBody,
-        //     });
-        // }
+            const messageBody = "\n" + formatDateTime(doc.data()) +
+            "\n" + doc.data().description;
 
-        // Send message to Discord
-        let formdata = {
-            "content": discordTitle + messageBody,
-        };
-        if (hasFlyer) {
-            formdata = {
-                ...formdata,
-                "flyer": {
-                    "value": flyer[0],
-                    "options": {
-                        "filename": "flyer.png",
-                        "contentType": null,
-        }}};
-}
-        await request({
-            "method": "POST",
-            "url": discordWebhook,
-            "formData": formdata,
-            }, function(error, response) {
-            if (error) throw new Error(error);
-                console.log(response.body);
-        });
-        // await slackResult;
+            // Send message to Slack
+            // const channel = slackChannel;
+            // if (hasFlyer) {
+            //     var slackResult = await app.client.files.upload({
+            //         channels: channel,
+            //         initial_comment: slackTitle + messageBody,
+            //         file: flyer[0],
+            //     });
+            // } else {
+            //     var slackResult = await app.client.chat.postMessage({
+            //         channels: channel,
+            //         text: slackTitle + messageBody,
+            //     });
+            // }
+
+            // Send message to Discord with retry logic
+            let formdata = {
+                "content": discordTitle + messageBody,
+            };
+            if (hasFlyer) {
+                formdata = {
+                    ...formdata,
+                    "flyer": {
+                        "value": flyer[0],
+                        "options": {
+                            "filename": "flyer.png",
+                            "contentType": null,
+            }}};
     }
-    return "done";
+            await executeWithRetry(
+                () => new Promise((resolve, reject) => {
+                    request({
+                        "method": "POST",
+                        "url": discordWebhook,
+                        "formData": formdata,
+                        "timeout": connectionConfig.timeout
+                    }, function(error, response) {
+                        if (error) {
+                            reject(new Error(error));
+                        } else {
+                            console.log(response.body);
+                            resolve(response);
+                        }
+                    });
+                }),
+                'send_discord_message'
+            );
+            // await slackResult;
+        }
+        return "done";
+    } catch (error) {
+        console.error('Error in sendEventMessages:', error);
+        throw new Error(`Failed to send event messages: ${error.message}`);
+    }
 }       
 
 exports.sendWelcomeEmail = functions.runWith({secrets: ["mailAppPassword"]})
 .https.onCall(async (data, context) => {
     const { email, firstName } = data;
 
-    const transporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: {
-            user: 'santaclara.acm@gmail.com',
-            pass: process.env.mailAppPassword,
-        }
-    });
-
-    const templatePath = path.join(__dirname, 'welcome_email.html');
-    let html = fs.readFileSync(templatePath, 'utf8');
-    html = html.replace('{{firstName}},', `${firstName},` || '');
-
-    const mailOptions = {
-        from: 'SCUACM <santaclara.acm@gmail.com>',
-        to: email,
-        subject: '😍 Welcome to ACM!! 😍',
-        html: html,
-    };
-
     try {
-        await transporter.sendMail(mailOptions);
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                user: 'santaclara.acm@gmail.com',
+                pass: process.env.mailAppPassword,
+            },
+            // Add connection timeout and retry settings
+            connectionTimeout: connectionConfig.timeout,
+            greetingTimeout: connectionConfig.timeout,
+            socketTimeout: connectionConfig.timeout,
+        });
+
+        const templatePath = path.join(__dirname, 'welcome_email.html');
+        let html = fs.readFileSync(templatePath, 'utf8');
+        html = html.replace('{{firstName}},', `${firstName},` || '');
+
+        const mailOptions = {
+            from: 'SCUACM <santaclara.acm@gmail.com>',
+            to: email,
+            subject: '😍 Welcome to ACM!! 😍',
+            html: html,
+        };
+
+        await executeWithRetry(
+            () => transporter.sendMail(mailOptions),
+            'send_welcome_email'
+        );
+        
         return { success: true };
     } catch (error) {
         console.error('Error sending email:', error);
-        throw new functions.https.HttpsError('internal', 'Failed to send email');
+        throw new functions.https.HttpsError('internal', `Failed to send email: ${error.message}`);
     }
 });
 
