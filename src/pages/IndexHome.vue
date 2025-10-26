@@ -17,7 +17,7 @@
             <v-col cols="12" class="title-container">
               <div class="title-sub-header">
                 Advancing computing as a science & profession at Santa Clara
-                University.
+                University. [Test PR - Draft]
               </div>
             </v-col>
           </v-row>
@@ -216,6 +216,7 @@ export default {
   watch: {},
 
   mounted() {
+    console.log("Test PR: IndexHome component mounted successfully");
     window.addEventListener("resize", this.handleResize);
     this.navigationHeight = this.$refs.navigation.clientHeight;
     this.isMounted = true;

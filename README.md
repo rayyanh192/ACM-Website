@@ -1,5 +1,7 @@
 # acm-new
 
+**Note: This repository currently contains test PR changes. See `test-pr-demo.md` for details.**
+
 ## Project setup
 ```
 npm install
