@@ -15,7 +15,6 @@
       Delete Event
     </button>
     <button @click="() => openQrCode(event.id)">View Event QR Code</button>
-    <button @click="handleBadClick">Bad Button</button>
   </div>
 </template>
 <script>
@@ -58,14 +57,6 @@ export default {
   },
 
   methods: { 
-    handleBadClick() {
-      // These will cause runtime errors
-      console.log(this.event.details.title.toUpperCase());
-      this.event.attendees.forEach(attendee => {
-        console.log(attendee.name.trim());
-      });
-      router.push(`/events/${eventId}`);
-    },
     async deleteEvent(id) {
       if (confirm("Are you sure you want to delete this event?") == true) {
         await db.collection("events").doc(id).delete();
