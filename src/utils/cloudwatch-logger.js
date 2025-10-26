@@ -6,12 +6,21 @@
 import AWS from 'aws-sdk';
 import { cloudWatchConfig } from '../config/cloudwatch';
 
-// Configure AWS CloudWatch Logs
-const logs = new AWS.CloudWatchLogs({
-  region: cloudWatchConfig.region,
-  accessKeyId: cloudWatchConfig.accessKeyId,
-  secretAccessKey: cloudWatchConfig.secretAccessKey
-});
+// Initialize CloudWatch Logs only if properly configured
+let logs = null;
+
+if (cloudWatchConfig.isEnabled) {
+  try {
+    logs = new AWS.CloudWatchLogs({
+      region: cloudWatchConfig.region,
+      accessKeyId: cloudWatchConfig.accessKeyId,
+      secretAccessKey: cloudWatchConfig.secretAccessKey
+    });
+  } catch (error) {
+    console.warn('Failed to initialize CloudWatch Logs:', error);
+    logs = null;
+  }
+}
 
 /**
  * Log any message to CloudWatch with specified level
@@ -21,6 +30,12 @@ const logs = new AWS.CloudWatchLogs({
  * @param {string} streamName - Optional custom stream name
  */
 async function logToCloudWatch(message, level = 'INFO', context = {}, streamName = null) {
+  // If CloudWatch is not configured or available, log to console only
+  if (!logs || !cloudWatchConfig.isEnabled) {
+    console.log(`${level} (CloudWatch disabled):`, message, context);
+    return;
+  }
+
   try {
     const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
     
