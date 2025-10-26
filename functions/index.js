@@ -14,6 +14,70 @@ const {tz} = require("moment-timezone");
 
 admin.initializeApp();
 
+// CloudWatch logging function
+exports.logToCloudWatch = functions
+.runWith({secrets: ["cloudWatchSecrets"]})
+.https.onCall(async (data, context) => {
+    try {
+        // Get CloudWatch credentials from secrets
+        let secretsString = process.env.cloudWatchSecrets;
+        if (!secretsString) {
+            console.warn('CloudWatch secrets not configured');
+            return { success: false, error: 'CloudWatch not configured' };
+        }
+        
+        let secretStrings = secretsString.replace("\\\"", "");
+        const secrets = JSON.parse(secretStrings);
+        
+        const AWS = require('aws-sdk');
+        
+        // Configure CloudWatch Logs
+        const logs = new AWS.CloudWatchLogs({
+            region: secrets.AWS_REGION || 'us-east-1',
+            accessKeyId: secrets.AWS_ACCESS_KEY_ID,
+            secretAccessKey: secrets.AWS_SECRET_ACCESS_KEY
+        });
+        
+        const { message, level = 'INFO', context: logContext = {}, streamName } = data;
+        
+        if (!message) {
+            throw new Error('Message is required');
+        }
+        
+        // Add user context if authenticated
+        const userContext = context.auth ? {
+            userId: context.auth.uid,
+            email: context.auth.token.email || 'unknown'
+        } : {};
+        
+        const logMessage = `${level}: ${message} - Context: ${JSON.stringify({
+            ...logContext,
+            ...userContext,
+            timestamp: new Date().toISOString()
+        })}`;
+        
+        const logGroupName = secrets.LOG_GROUP_NAME || 'acm-website-logs';
+        const defaultStreamName = level === 'ERROR' ? 'error-stream' : 'activity-stream';
+        const finalStreamName = streamName || defaultStreamName;
+        
+        await logs.putLogEvents({
+            logGroupName: logGroupName,
+            logStreamName: finalStreamName,
+            logEvents: [{
+                timestamp: Date.now(),
+                message: logMessage
+            }]
+        }).promise();
+        
+        console.log(`${level} logged to CloudWatch:`, message);
+        return { success: true };
+        
+    } catch (error) {
+        console.error('Failed to log to CloudWatch:', error);
+        return { success: false, error: error.message };
+    }
+});
+
 exports.addRole = functions.https.onCall(async (data, context) => {
     const isAdmin = context.auth.token.admin || false;
     if (!isAdmin) {
