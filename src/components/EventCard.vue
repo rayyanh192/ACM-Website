@@ -100,16 +100,18 @@ export default {
     }
   },
 
-  data: () => ({
-    image: null,
-    dialog: false,
-    eventTags: eventTags,
-    eventColors: eventColors,
-    pageViews: {
-        List: 0,
-        Grid: 1,
-      }
-  }),
+  data() {
+    return {
+      image: null,
+      dialog: false,
+      eventTags: eventTags,
+      eventColors: eventColors,
+      pageViews: {
+          List: 0,
+          Grid: 1,
+        }
+    };
+  },
 
   methods: {
     formatDateTime(event) {
