@@ -28,8 +28,48 @@ import {auth} from './firebase';
 import { getUserPerms } from "./helpers";
 import { serverLogger } from './utils/serverLogger';
 import { cloudWatchLogger } from './utils/cloudWatchLogger';
+import { getConfigStatus } from './config/cloudwatch';
 import '@mdi/font/css/materialdesignicons.css';
 import '@/assets/override.css';
+
+// Initialize and validate CloudWatch configuration at startup
+const initializeMonitoring = async () => {
+  try {
+    const configStatus = getConfigStatus();
+    console.log('CloudWatch Configuration Status:', configStatus);
+    
+    if (!configStatus.isValid) {
+      console.warn('CloudWatch configuration issues:', configStatus.issues);
+      console.warn('Monitoring will use fallback logging only');
+    } else {
+      console.log('CloudWatch configuration is valid');
+      
+      // Test connection
+      try {
+        const healthCheck = await cloudWatchLogger.healthCheck();
+        console.log('CloudWatch Health Check:', healthCheck);
+        
+        if (healthCheck.healthy) {
+          console.log('CloudWatch monitoring is fully operational');
+          // Log successful initialization
+          await cloudWatchLogger.info('Application started with CloudWatch monitoring', {
+            type: 'application_startup',
+            configStatus: healthCheck
+          });
+        } else {
+          console.warn('CloudWatch monitoring has issues:', healthCheck);
+        }
+      } catch (error) {
+        console.warn('CloudWatch health check failed:', error.message);
+      }
+    }
+  } catch (error) {
+    console.error('Failed to initialize monitoring:', error);
+  }
+};
+
+// Initialize monitoring
+initializeMonitoring();
 
 const routes = [
   {

@@ -8,6 +8,34 @@
             <v-card-text>
               <p>This page tests the CloudWatch logging integration. Click the buttons below to trigger different types of errors.</p>
               
+              <!-- Configuration Status -->
+              <v-card class="mb-4" variant="outlined">
+                <v-card-title class="text-h6">Configuration Status</v-card-title>
+                <v-card-text>
+                  <div v-if="configStatus">
+                    <v-chip 
+                      :color="configStatus.healthy ? 'success' : 'error'" 
+                      class="mb-2"
+                    >
+                      {{ configStatus.healthy ? 'Healthy' : 'Unhealthy' }}
+                    </v-chip>
+                    
+                    <div class="text-body-2">
+                      <strong>Configured:</strong> {{ configStatus.isConfigured ? 'Yes' : 'No' }}<br>
+                      <strong>Connection:</strong> {{ configStatus.connectionStatus }}<br>
+                      <strong>Queued Errors:</strong> {{ configStatus.queuedErrors }}<br>
+                      <strong>Region:</strong> {{ configStatus.config.region }}<br>
+                      <strong>Log Group:</strong> {{ configStatus.config.logGroupName }}<br>
+                      <div v-if="configStatus.configurationError" class="text-error mt-2">
+                        <strong>Error:</strong> {{ configStatus.configurationError }}
+                      </div>
+                    </div>
+                  </div>
+                  <v-progress-circular v-else indeterminate size="20"></v-progress-circular>
+                </v-card-text>
+              </v-card>
+              
+              <!-- Test Buttons -->
               <v-btn 
                 color="error" 
                 class="ma-2" 
@@ -53,6 +81,36 @@
                 Test General Error
               </v-btn>
               
+              <!-- Diagnostic Buttons -->
+              <v-divider class="my-4"></v-divider>
+              
+              <v-btn 
+                color="success" 
+                class="ma-2" 
+                @click="testConnection"
+                :loading="loading.connection"
+              >
+                Test Connection
+              </v-btn>
+              
+              <v-btn 
+                color="orange" 
+                class="ma-2" 
+                @click="processQueue"
+                :loading="loading.queue"
+              >
+                Process Queue ({{ configStatus?.queuedErrors || 0 }})
+              </v-btn>
+              
+              <v-btn 
+                color="purple" 
+                class="ma-2" 
+                @click="refreshStatus"
+                :loading="loading.status"
+              >
+                Refresh Status
+              </v-btn>
+              
               <div v-if="lastResult" class="mt-4">
                 <v-alert 
                   :type="lastResult.success ? 'success' : 'error'"
@@ -80,13 +138,76 @@ export default {
         database: false,
         api: false,
         firebase: false,
-        general: false
+        general: false,
+        connection: false,
+        queue: false,
+        status: false
       },
-      lastResult: null
+      lastResult: null,
+      configStatus: null
     };
   },
   
+  async mounted() {
+    await this.refreshStatus();
+  },
+  
   methods: {
+    async refreshStatus() {
+      this.loading.status = true;
+      try {
+        this.configStatus = await cloudWatchLogger.healthCheck();
+      } catch (error) {
+        console.error('Failed to get CloudWatch status:', error);
+        this.configStatus = {
+          healthy: false,
+          isConfigured: false,
+          connectionStatus: 'error',
+          configurationError: error.message
+        };
+      } finally {
+        this.loading.status = false;
+      }
+    },
+
+    async testConnection() {
+      this.loading.connection = true;
+      try {
+        const result = await cloudWatchLogger.testConnection();
+        this.lastResult = {
+          success: result,
+          message: result ? 'Connection test successful!' : 'Connection test failed - check configuration'
+        };
+        await this.refreshStatus();
+      } catch (error) {
+        this.lastResult = {
+          success: false,
+          message: `Connection test failed: ${error.message}`
+        };
+      } finally {
+        this.loading.connection = false;
+      }
+    },
+
+    async processQueue() {
+      this.loading.queue = true;
+      try {
+        await cloudWatchLogger.processQueue();
+        this.lastResult = {
+          success: true,
+          message: 'Error queue processed successfully!'
+        };
+        await this.refreshStatus();
+      } catch (error) {
+        this.lastResult = {
+          success: false,
+          message: `Failed to process queue: ${error.message}`
+        };
+      } finally {
+        this.loading.queue = false;
+      }
+    },
+    
     async testPaymentError() {
       this.loading.payment = true;
       try {
@@ -104,6 +225,7 @@ export default {
           success: true,
           message: 'Payment error logged to CloudWatch successfully!'
         };
+        await this.refreshStatus();
       } catch (error) {
         this.lastResult = {
           success: false,
@@ -131,6 +253,7 @@ export default {
           success: true,
           message: 'Database error logged to CloudWatch successfully!'
         };
+        await this.refreshStatus();
       } catch (error) {
         this.lastResult = {
           success: false,
@@ -158,6 +281,7 @@ export default {
           success: true,
           message: 'API error logged to CloudWatch successfully!'
         };
+        await this.refreshStatus();
       } catch (error) {
         this.lastResult = {
           success: false,
@@ -185,6 +309,7 @@ export default {
           success: true,
           message: 'Firebase error logged to CloudWatch successfully!'
         };
+        await this.refreshStatus();
       } catch (error) {
         this.lastResult = {
           success: false,
@@ -216,6 +341,7 @@ export default {
           success: true,
           message: 'General error logged to CloudWatch successfully!'
         };
+        await this.refreshStatus();
       } catch (error) {
         this.lastResult = {
           success: false,

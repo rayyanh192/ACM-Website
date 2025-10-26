@@ -4,14 +4,68 @@
  */
 
 import AWS from 'aws-sdk';
-import { cloudWatchConfig } from '../config/cloudwatch';
+import { cloudWatchConfig, validateCloudWatchConfig } from '../config/cloudwatch';
 
 // Configure AWS CloudWatch Logs
-const logs = new AWS.CloudWatchLogs({
-  region: cloudWatchConfig.region,
-  accessKeyId: cloudWatchConfig.accessKeyId,
-  secretAccessKey: cloudWatchConfig.secretAccessKey
-});
+let logs = null;
+let isConfigured = false;
+let configurationError = null;
+let connectionTested = false;
+let connectionStatus = 'unknown';
+
+// Error queue for when CloudWatch is unavailable
+let errorQueue = [];
+const MAX_QUEUE_SIZE = 100;
+
+// Initialize CloudWatch configuration
+function initializeCloudWatch() {
+  try {
+    const validation = validateCloudWatchConfig();
+    
+    if (!validation.isValid) {
+      configurationError = `CloudWatch configuration invalid: ${validation.issues.join(', ')}`;
+      console.warn('CloudWatch Logger:', configurationError);
+      return false;
+    }
+
+    logs = new AWS.CloudWatchLogs({
+      region: cloudWatchConfig.region,
+      accessKeyId: cloudWatchConfig.accessKeyId,
+      secretAccessKey: cloudWatchConfig.secretAccessKey
+    });
+
+    isConfigured = true;
+    configurationError = null;
+    return true;
+  } catch (error) {
+    configurationError = `CloudWatch initialization failed: ${error.message}`;
+    console.error('CloudWatch Logger:', configurationError);
+    return false;
+  }
+}
+
+// Test CloudWatch connection
+async function testConnection() {
+  if (!isConfigured) {
+    connectionStatus = 'not_configured';
+    return false;
+  }
+
+  try {
+    // Try to describe log groups to test connection
+    await logs.describeLogGroups({ limit: 1 }).promise();
+    connectionStatus = 'connected';
+    connectionTested = true;
+    return true;
+  } catch (error) {
+    connectionStatus = `connection_failed: ${error.message}`;
+    console.warn('CloudWatch connection test failed:', error.message);
+    return false;
+  }
+}
+
+// Initialize on module load
+initializeCloudWatch();
 
 /**
  * Log any message to CloudWatch with specified level
@@ -21,23 +75,99 @@ const logs = new AWS.CloudWatchLogs({
  * @param {string} streamName - Optional custom stream name
  */
 async function logToCloudWatch(message, level = 'INFO', context = {}, streamName = null) {
+  const logEntry = {
+    message,
+    level,
+    context,
+    streamName: streamName || cloudWatchConfig.logStreamName,
+    timestamp: Date.now(),
+    url: typeof window !== 'undefined' ? window.location.href : 'server',
+    userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'server'
+  };
+
+  // If not configured, queue the error and try to log locally
+  if (!isConfigured) {
+    queueError(logEntry);
+    console.log(`${level} (CloudWatch not configured):`, message, context);
+    return;
+  }
+
+  // Test connection if not tested yet
+  if (!connectionTested) {
+    await testConnection();
+  }
+
+  // If connection failed, queue the error
+  if (connectionStatus !== 'connected') {
+    queueError(logEntry);
+    console.log(`${level} (CloudWatch unavailable):`, message, context);
+    return;
+  }
+
   try {
-    const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
+    const logMessage = `${level}: ${message} - Source: ${logEntry.url} - Context: ${JSON.stringify(context)}`;
     
     await logs.putLogEvents({
       logGroupName: cloudWatchConfig.logGroupName,
-      logStreamName: streamName || cloudWatchConfig.logStreamName,
+      logStreamName: logEntry.streamName,
       logEvents: [{
-        timestamp: Date.now(),
+        timestamp: logEntry.timestamp,
         message: logMessage
       }]
     }).promise();
     
     console.log(`${level} logged to CloudWatch:`, message);
+    
+    // Process any queued errors on successful log
+    await processErrorQueue();
+    
   } catch (err) {
     console.log('Failed to log to CloudWatch:', err);
+    
+    // Queue this error for retry
+    queueError(logEntry);
+    
     // Fallback: log to console
     console.log(`${level} (fallback):`, message, context);
+    
+    // Update connection status
+    connectionStatus = `error: ${err.message}`;
+    connectionTested = false;
+  }
+}
+
+// Queue errors when CloudWatch is unavailable
+function queueError(logEntry) {
+  if (errorQueue.length >= MAX_QUEUE_SIZE) {
+    errorQueue.shift(); // Remove oldest entry
+  }
+  errorQueue.push(logEntry);
+}
+
+// Process queued errors
+async function processErrorQueue() {
+  if (errorQueue.length === 0) return;
+  
+  const batch = errorQueue.splice(0, Math.min(10, errorQueue.length)); // Process up to 10 at a time
+  
+  for (const entry of batch) {
+    try {
+      const logMessage = `${entry.level}: ${entry.message} - Source: ${entry.url} - Context: ${JSON.stringify(entry.context)}`;
+      
+      await logs.putLogEvents({
+        logGroupName: cloudWatchConfig.logGroupName,
+        logStreamName: entry.streamName,
+        logEvents: [{
+          timestamp: entry.timestamp,
+          message: logMessage
+        }]
+      }).promise();
+      
+    } catch (err) {
+      // Re-queue failed entries
+      queueError(entry);
+      break; // Stop processing if we hit an error
+    }
   }
 }
 
@@ -76,12 +206,56 @@ export const cloudWatchLogger = {
     return logError(message, context);
   },
 
+  // Diagnostic methods
+  getStatus() {
+    return {
+      isConfigured,
+      configurationError,
+      connectionStatus,
+      connectionTested,
+      queuedErrors: errorQueue.length,
+      maxQueueSize: MAX_QUEUE_SIZE,
+      config: {
+        region: cloudWatchConfig.region,
+        logGroupName: cloudWatchConfig.logGroupName,
+        logStreamName: cloudWatchConfig.logStreamName,
+        activityStreamName: cloudWatchConfig.activityStreamName
+      }
+    };
+  },
+
+  async testConnection() {
+    return await testConnection();
+  },
+
+  async healthCheck() {
+    const status = this.getStatus();
+    const testResult = await this.testConnection();
+    
+    return {
+      ...status,
+      connectionTest: testResult,
+      healthy: isConfigured && testResult,
+      timestamp: new Date().toISOString()
+    };
+  },
+
+  // Force process queued errors
+  async processQueue() {
+    return await processErrorQueue();
+  },
+
+  // Clear error queue (for testing)
+  clearQueue() {
+    errorQueue = [];
+  },
+
   // Activity logging
   async logPageView(pageName, context = {}) {
     return logToCloudWatch(`Page viewed: ${pageName}`, 'INFO', {
       type: 'page_view',
       page: pageName,
-      url: window.location.href,
+      url: typeof window !== 'undefined' ? window.location.href : 'server',
       ...context
     }, cloudWatchConfig.activityStreamName);
   },
@@ -90,7 +264,7 @@ export const cloudWatchLogger = {
     return logToCloudWatch(`Button clicked: ${buttonName}`, 'INFO', {
       type: 'button_click',
       button: buttonName,
-      url: window.location.href,
+      url: typeof window !== 'undefined' ? window.location.href : 'server',
       ...context
     }, cloudWatchConfig.activityStreamName);
   },
@@ -99,7 +273,7 @@ export const cloudWatchLogger = {
     return logToCloudWatch(`User action: ${action}`, 'INFO', {
       type: 'user_action',
       action: action,
-      url: window.location.href,
+      url: typeof window !== 'undefined' ? window.location.href : 'server',
       ...context
     }, cloudWatchConfig.activityStreamName);
   },
