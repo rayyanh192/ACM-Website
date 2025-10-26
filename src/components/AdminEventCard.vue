@@ -106,11 +106,13 @@ export default {
   },
   
 
-  data: () => ({
-    attendance: null,
-    canEdit: false,
-    canDelete: false,
-  }),
+  data() {
+    return {
+      attendance: null,
+      canEdit: false,
+      canDelete: false,
+    };
+  },
 };
 </script>
 
