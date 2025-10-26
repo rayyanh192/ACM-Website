@@ -1,20 +1,23 @@
 <template>
-  <div>
+  <div v-if="event">
     <h3>
-      {{ event.title }} ({{ formatDateTime(event) }}) Attendance:
+      {{ event.title || 'Untitled Event' }} ({{ formatDateTime(event) }}) Attendance:
       {{ Number.isInteger(event.attendance) ? event.attendance : "Loading" }}
     </h3>
-    <router-link v-if="canEdit" :to="'/admin/events/' + event.id"
+    <router-link v-if="canEdit && event.id" :to="'/admin/events/' + event.id"
       ><button>Edit Event</button></router-link
     >
     <button
-      v-if="canDelete"
+      v-if="canDelete && event.id"
       @click="() => deleteEvent(event.id)"
       class="remove"
     >
       Delete Event
     </button>
-    <button @click="() => openQrCode(event.id)">View Event QR Code</button>
+    <button v-if="event.id" @click="() => openQrCode(event.id)">View Event QR Code</button>
+  </div>
+  <div v-else>
+    <h3>Loading event...</h3>
   </div>
 </template>
 <script>
@@ -28,13 +31,25 @@ export default {
   components: {},
 
   props: {
-    event: Object,
+    event: {
+      type: Object,
+      required: true,
+      default: () => null,
+      validator: (value) => {
+        // Allow null during loading, but if provided, should have basic structure
+        return value === null || (typeof value === 'object' && value !== null);
+      }
+    },
   },
 
   async mounted() {
-    await this.fetchEventAttendance(this.event.id);
+    // Only proceed if event exists and has an id
+    if (this.event && this.event.id) {
+      await this.fetchEventAttendance(this.event.id);
+    }
+    
     auth.onAuthStateChanged(async (user) => {
-      if (user) {
+      if (user && this.event) {
         const perms = await getUserPerms(user);
         this.canEdit =
           perms.otherEditEvent ||
@@ -64,9 +79,19 @@ export default {
       }
     },
     async fetchEventAttendance(eventId) {
-      const eventDoc = await db.collection("events").doc(eventId).get();
-      if (eventDoc.exists) {
-        this.attendance = eventDoc.data().attendance;
+      // Validate eventId parameter
+      if (!eventId) {
+        console.warn('fetchEventAttendance called without valid eventId');
+        return;
+      }
+      
+      try {
+        const eventDoc = await db.collection("events").doc(eventId).get();
+        if (eventDoc.exists) {
+          this.attendance = eventDoc.data().attendance;
+        }
+      } catch (error) {
+        console.error('Error fetching event attendance:', error);
       }
     },
     async openQrCode(id) {
@@ -95,13 +120,25 @@ export default {
       window.open(blobUrl, "_blank");
     },
     formatDateTime(event) {
+      if (!event) {
+        return 'No date available';
+      }
       return getFormatDateTime(event);
     },
     async fetchAdditionalData() {
-      const result = await functions.httpsCallable("someFunction")({
-        id: this.event.id,
-      });
-      console.log(result.data);
+      if (!this.event || !this.event.id) {
+        console.warn('fetchAdditionalData called without valid event');
+        return;
+      }
+      
+      try {
+        const result = await functions.httpsCallable("someFunction")({
+          id: this.event.id,
+        });
+        console.log(result.data);
+      } catch (error) {
+        console.error('Error fetching additional data:', error);
+      }
     },
   },
   

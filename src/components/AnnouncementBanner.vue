@@ -1,9 +1,9 @@
 <template>
-  <div v-if="show">
+  <div v-if="show && (content || link)">
     <div class="banner-container">
       <div class="banner-text">
-        {{ content }}
-        <a class="banner-link" :href="link" target="_blank">{{ linkTitle }}</a> 
+        {{ content || '' }}
+        <a v-if="link && linkTitle" class="banner-link" :href="link" target="_blank">{{ linkTitle }}</a> 
       </div>
     </div>
   </div>
@@ -15,10 +15,22 @@ export default {
   name: "AnnouncementBanner",
 
   props: {
-    link: String,
-    linkTitle: String,
-    show: Boolean,
-    content: String,
+    link: {
+      type: String,
+      default: ''
+    },
+    linkTitle: {
+      type: String,
+      default: ''
+    },
+    show: {
+      type: Boolean,
+      default: false
+    },
+    content: {
+      type: String,
+      default: ''
+    },
   },
 
   data: () => ({}),
