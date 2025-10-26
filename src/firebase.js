@@ -31,4 +31,17 @@ export const functions = firebase.functions();
 //   storage.useEmulator("localhost",9199)
 // }
 
-db.enablePersistence();
+// Enable persistence with error handling
+try {
+  db.enablePersistence();
+  console.log('Firebase persistence enabled');
+} catch (err) {
+  if (err.code === 'failed-precondition') {
+    console.warn('Firebase persistence failed: Multiple tabs open, persistence can only be enabled in one tab at a time.');
+  } else if (err.code === 'unimplemented') {
+    console.warn('Firebase persistence failed: The current browser does not support all of the features required to enable persistence.');
+  } else {
+    console.warn('Firebase persistence failed:', err);
+  }
+  // Continue without persistence - the app will still work
+}

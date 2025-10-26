@@ -6,12 +6,22 @@
 import AWS from 'aws-sdk';
 import { cloudWatchConfig } from '../config/cloudwatch';
 
-// Configure AWS CloudWatch Logs
-const logs = new AWS.CloudWatchLogs({
-  region: cloudWatchConfig.region,
-  accessKeyId: cloudWatchConfig.accessKeyId,
-  secretAccessKey: cloudWatchConfig.secretAccessKey
-});
+// Configure AWS CloudWatch Logs only if properly configured
+let logs = null;
+if (cloudWatchConfig.isConfigured) {
+  try {
+    logs = new AWS.CloudWatchLogs({
+      region: cloudWatchConfig.region,
+      accessKeyId: cloudWatchConfig.accessKeyId,
+      secretAccessKey: cloudWatchConfig.secretAccessKey
+    });
+  } catch (error) {
+    console.warn('Failed to initialize CloudWatch client:', error);
+    logs = null;
+  }
+} else {
+  console.warn('CloudWatch logging disabled due to missing configuration');
+}
 
 /**
  * Log any message to CloudWatch with specified level
@@ -21,6 +31,14 @@ const logs = new AWS.CloudWatchLogs({
  * @param {string} streamName - Optional custom stream name
  */
 async function logToCloudWatch(message, level = 'INFO', context = {}, streamName = null) {
+  // Always log to console for debugging
+  console.log(`${level}: ${message}`, context);
+  
+  // If CloudWatch is not configured, only log to console
+  if (!logs || !cloudWatchConfig.isConfigured) {
+    return;
+  }
+  
   try {
     const logMessage = `${level}: ${message} - Source: ${window.location.host} - Context: ${JSON.stringify(context)}`;
     
@@ -35,9 +53,8 @@ async function logToCloudWatch(message, level = 'INFO', context = {}, streamName
     
     console.log(`${level} logged to CloudWatch:`, message);
   } catch (err) {
-    console.log('Failed to log to CloudWatch:', err);
-    // Fallback: log to console
-    console.log(`${level} (fallback):`, message, context);
+    console.warn('Failed to log to CloudWatch:', err);
+    // Graceful degradation - continue with console logging only
   }
 }
 
