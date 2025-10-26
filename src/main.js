@@ -23,13 +23,39 @@ import RedirectRouter from "@/pages/RedirectRouter.vue";
 import AdminRoles from '@/pages/AdminRoles.vue';
 import AdminStats from "@/pages/AdminStats.vue";
 import TestCloudWatch from "@/pages/TestCloudWatch.vue";
+import HealthCheck from "@/pages/HealthCheck.vue";
 
 import {auth} from './firebase';
 import { getUserPerms } from "./helpers";
 import { serverLogger } from './utils/serverLogger';
 import { cloudWatchLogger } from './utils/cloudWatchLogger';
+import { healthMonitor } from './utils/healthMonitor';
 import '@mdi/font/css/materialdesignicons.css';
 import '@/assets/override.css';
+
+// Initialize health monitoring
+const initializeHealthMonitoring = () => {
+  try {
+    // Log application startup
+    cloudWatchLogger.info('Application starting up', {
+      type: 'application_lifecycle',
+      timestamp: new Date().toISOString(),
+      userAgent: navigator.userAgent,
+      url: window.location.href
+    }).catch(error => {
+      console.log('Failed to log application startup:', error);
+    });
+
+    // Start health monitoring in production
+    if (process.env.NODE_ENV === 'production') {
+      setTimeout(() => {
+        healthMonitor.startMonitoring();
+      }, 5000); // 5 second delay
+    }
+  } catch (error) {
+    console.warn('Failed to initialize health monitoring:', error);
+  }
+};
 
 const routes = [
   {
@@ -171,6 +197,10 @@ const routes = [
     component: TestCloudWatch,
   },
   {
+    path: "/health",
+    component: HealthCheck,
+  },
+  {
     path: "/redirect",
     component: RedirectRouter,
   },
@@ -195,12 +225,17 @@ const router = createRouter({
 });
 
 router.beforeEach( async (to, from) => {
-  // Log page navigation
+  // Log page navigation with enhanced error handling
   try {
-    await cloudWatchLogger.logNavigation(from.path, to.path, {
+    const result = await cloudWatchLogger.logNavigation(from.path, to.path, {
       needsAuth: to.matched.some(record => record.meta.authRequired),
       hasPerms: to.matched.find(record => record.meta.permsRequired)?.meta?.permsRequired ? true : false
     });
+    
+    // Log navigation failures for debugging
+    if (!result.success) {
+      console.log('Navigation logging failed:', result.error);
+    }
   } catch (error) {
     console.log('Failed to log navigation:', error);
   }
@@ -242,15 +277,20 @@ router.beforeEach( async (to, from) => {
   return path;
 });
 
-// Log successful page views
+// Log successful page views with enhanced error handling
 router.afterEach(async (to, from) => {
   try {
-    await cloudWatchLogger.logPageView(to.name || to.path, {
+    const result = await cloudWatchLogger.logPageView(to.name || to.path, {
       from: from.path,
       to: to.path,
       params: to.params,
       query: to.query
     });
+    
+    // Log page view failures for debugging
+    if (!result.success) {
+      console.log('Page view logging failed:', result.error);
+    }
   } catch (error) {
     console.log('Failed to log page view:', error);
   }
@@ -263,40 +303,49 @@ const vuetify = createVuetify({
 
 const app = createApp(App);
 
-// Global error handler for Vue
+// Enhanced global error handler for Vue
 app.config.errorHandler = (err, vm, info) => {
   console.error('Vue Error:', err);
   console.error('Component:', vm);
   console.error('Info:', info);
   
-  // Log to CloudWatch
+  // Log to CloudWatch with enhanced error handling
   cloudWatchLogger.componentError(
     err, 
     vm?.$options?.name || 'Unknown', 
     info || 'unknown'
-  ).catch(logError => {
+  ).then(result => {
+    if (!result.success) {
+      console.error('Failed to log Vue error to CloudWatch:', result.error);
+    }
+  }).catch(logError => {
     console.error('Failed to log Vue error to CloudWatch:', logError);
   });
 };
 
-// Global unhandled promise rejection handler
+// Enhanced global unhandled promise rejection handler
 window.addEventListener('unhandledrejection', (event) => {
   console.error('Unhandled Promise Rejection:', event.reason);
   
-  // Log to CloudWatch
+  // Log to CloudWatch with enhanced error handling
   cloudWatchLogger.error(
     `Unhandled Promise Rejection: ${event.reason}`,
     {
       type: 'promise_rejection',
       url: window.location.href,
-      userAgent: navigator.userAgent
+      userAgent: navigator.userAgent,
+      stack: event.reason?.stack
     }
-  ).catch(logError => {
+  ).then(result => {
+    if (!result.success) {
+      console.error('Failed to log promise rejection to CloudWatch:', result.error);
+    }
+  }).catch(logError => {
     console.error('Failed to log promise rejection to CloudWatch:', logError);
   });
 });
 
-// Global activity logging - creates nginx log entries
+// Enhanced global activity logging - creates nginx log entries
 window.addEventListener('click', async (event) => {
   try {
     const target = event.target;
@@ -311,43 +360,52 @@ window.addEventListener('click', async (event) => {
   }
 });
 
-// Log form submissions
+// Enhanced form submission logging
 window.addEventListener('submit', async (event) => {
   try {
-    await cloudWatchLogger.logUserAction('Form Submission', {
+    const result = await cloudWatchLogger.logUserAction('Form Submission', {
       formId: event.target.id,
       formClass: event.target.className,
       action: event.target.action
     });
+    
+    if (!result.success) {
+      console.log('Form submission logging failed:', result.error);
+    }
   } catch (error) {
     console.log('Failed to log form submission:', error);
   }
 });
 
-// Log authentication state changes
+// Enhanced authentication state change logging
 auth.onAuthStateChanged(async (user) => {
   try {
+    let result;
     if (user) {
-      await cloudWatchLogger.logUserAction('User Signed In', {
+      result = await cloudWatchLogger.logUserAction('User Signed In', {
         userId: user.uid,
         email: user.email,
         provider: user.providerData[0]?.providerId
       });
     } else {
-      await cloudWatchLogger.logUserAction('User Signed Out', {
+      result = await cloudWatchLogger.logUserAction('User Signed Out', {
         timestamp: new Date().toISOString()
       });
+    }
+    
+    if (!result.success) {
+      console.log('Auth state change logging failed:', result.error);
     }
   } catch (error) {
     console.log('Failed to log auth state change:', error);
   }
 });
 
-// Global JavaScript error handler
+// Enhanced global JavaScript error handler
 window.addEventListener('error', (event) => {
   console.error('Global JavaScript Error:', event.error);
   
-  // Log to CloudWatch
+  // Log to CloudWatch with enhanced error handling
   cloudWatchLogger.error(
     `Global JavaScript Error: ${event.error?.message || event.message}`,
     {
@@ -355,12 +413,20 @@ window.addEventListener('error', (event) => {
       filename: event.filename,
       lineno: event.lineno,
       colno: event.colno,
-      url: window.location.href
+      url: window.location.href,
+      stack: event.error?.stack
     }
-  ).catch(logError => {
+  ).then(result => {
+    if (!result.success) {
+      console.error('Failed to log JS error to CloudWatch:', result.error);
+    }
+  }).catch(logError => {
     console.error('Failed to log JS error to CloudWatch:', logError);
   });
 });
+
+// Initialize health monitoring
+initializeHealthMonitoring();
 
 app.use(router);
 app.use(vuetify);
