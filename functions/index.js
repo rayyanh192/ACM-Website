@@ -10,61 +10,147 @@ const moment = require("moment");
 const nodemailer = require("nodemailer");
 // eslint-disable-next-line no-unused-vars
 const {tz} = require("moment-timezone");
+const AWS = require("aws-sdk");
 // const {App} = require("@slack/bolt");
 
 admin.initializeApp();
 
-exports.addRole = functions.https.onCall(async (data, context) => {
-    const isAdmin = context.auth.token.admin || false;
-    if (!isAdmin) {
-        return {message: "You must be an admin to add another admin user"};
-    }
-    const uid = data.uid;
-    const role = data.role;
-    if (!uid) {
-        return {message: "Please pass a UID to the function"};
-    }
+// Configure AWS CloudWatch Logs for server-side logging
+const cloudWatchLogs = new AWS.CloudWatchLogs({
+  region: process.env.AWS_REGION || 'us-east-1',
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+});
 
-    const currentClaims = (await admin.auth().getUser(uid)).customClaims || {};
-    const roles = currentClaims?.roles || [];
-    roles.push(role);
-    currentClaims.roles = roles;
+// Secure CloudWatch logging proxy function
+exports.logToCloudWatch = functions.https.onCall(async (data, context) => {
+  // Verify user is authenticated
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated to log events');
+  }
 
-    await admin.auth().setCustomUserClaims(uid, currentClaims);
-    const userRecord = await admin.auth().getUser(uid);
-    return {
-        uid: userRecord.uid,
-        email: userRecord.email,
-        displayName: userRecord.displayName,
-        claims: userRecord.customClaims,
+  const { message, level = 'INFO', logContext = {}, streamName } = data;
+  
+  if (!message) {
+    throw new functions.https.HttpsError('invalid-argument', 'Message is required');
+  }
+
+  try {
+    const logGroupName = process.env.LOG_GROUP_NAME || 'acm-website-logs';
+    const defaultStreamName = process.env.LOG_STREAM_NAME || 'error-stream';
+    const activityStreamName = process.env.ACTIVITY_STREAM_NAME || 'activity-stream';
+    
+    // Add user context to log
+    const enrichedContext = {
+      ...logContext,
+      userId: context.auth.uid,
+      userEmail: context.auth.token.email,
+      timestamp: new Date().toISOString(),
+      source: 'frontend'
     };
+
+    const logMessage = `${level}: ${message} - Context: ${JSON.stringify(enrichedContext)}`;
+    
+    const params = {
+      logGroupName: logGroupName,
+      logStreamName: streamName || (level === 'INFO' && logContext.type ? activityStreamName : defaultStreamName),
+      logEvents: [{
+        timestamp: Date.now(),
+        message: logMessage
+      }]
+    };
+
+    await cloudWatchLogs.putLogEvents(params).promise();
+    
+    console.log(`${level} logged to CloudWatch:`, message);
+    return { success: true, message: 'Log sent successfully' };
+    
+  } catch (error) {
+    console.error('Failed to log to CloudWatch:', error);
+    throw new functions.https.HttpsError('internal', 'Failed to send log to CloudWatch');
+  }
+});
+
+exports.addRole = functions.https.onCall(async (data, context) => {
+    try {
+        const isAdmin = context.auth.token.admin || false;
+        if (!isAdmin) {
+            return {error: "You must be an admin to add another admin user"};
+        }
+        const uid = data.uid;
+        const role = data.role;
+        if (!uid) {
+            return {error: "Please pass a UID to the function"};
+        }
+        if (!role) {
+            return {error: "Please pass a role to the function"};
+        }
+
+        const currentClaims = (await admin.auth().getUser(uid)).customClaims || {};
+        const roles = currentClaims?.roles || [];
+        
+        // Check if role already exists
+        if (roles.includes(role)) {
+            return {error: "User already has this role"};
+        }
+        
+        roles.push(role);
+        currentClaims.roles = roles;
+
+        await admin.auth().setCustomUserClaims(uid, currentClaims);
+        const userRecord = await admin.auth().getUser(uid);
+        return {
+            success: true,
+            uid: userRecord.uid,
+            email: userRecord.email,
+            displayName: userRecord.displayName,
+            claims: userRecord.customClaims,
+        };
+    } catch (error) {
+        console.error('Error in addRole:', error);
+        return {error: "Failed to add role: " + error.message};
+    }
 });
 
 exports.removeRole = functions.https.onCall(async (data, context) => {
-    const isAdmin = context.auth.token.admin || false;
-    if (!isAdmin) {
-        return {message: "You must be an admin to add another admin user"};
-    }
-    const uid = data.uid;
-    const role = data.role;
-    if (!uid) {
-        return {message: "Please pass a UID to the function"};
-    }
-    const currentClaims = (await admin.auth().getUser(uid)).customClaims;
+    try {
+        const isAdmin = context.auth.token.admin || false;
+        if (!isAdmin) {
+            return {error: "You must be an admin to remove a user role"};
+        }
+        const uid = data.uid;
+        const role = data.role;
+        if (!uid) {
+            return {error: "Please pass a UID to the function"};
+        }
+        if (!role) {
+            return {error: "Please pass a role to the function"};
+        }
+        
+        const currentClaims = (await admin.auth().getUser(uid)).customClaims;
+        const roles = currentClaims?.roles ?? [];
+        
+        const roleIndex = roles.indexOf(role);
+        if (roleIndex === -1) {
+            return {error: "User does not have this role"};
+        }
+        
+        roles.splice(roleIndex, 1);
+        currentClaims.roles = roles;
 
-    const roles = currentClaims?.roles ?? [];
-    console.log("INDEX", roles.indexOf(role));
-    roles.splice(roles.indexOf(role), 1);
-    currentClaims.roles = roles;
-
-    await admin.auth().setCustomUserClaims(uid, currentClaims);
-    const userRecord = await admin.auth().getUser(uid);
-    return {
-        uid: userRecord.uid,
-        email: userRecord.email,
-        displayName: userRecord.displayName,
-        claims: userRecord.customClaims,
-    };
+        await admin.auth().setCustomUserClaims(uid, currentClaims);
+        const userRecord = await admin.auth().getUser(uid);
+        return {
+            success: true,
+            uid: userRecord.uid,
+            email: userRecord.email,
+            displayName: userRecord.displayName,
+            claims: userRecord.customClaims,
+        };
+    } catch (error) {
+        console.error('Error in removeRole:', error);
+        return {error: "Failed to remove role: " + error.message};
+    }
 });
 
 exports.searchUsers = functions.https.onCall((data, context) => {
@@ -106,18 +192,34 @@ exports.addAdmin = functions.https.onCall((data, context) => {
         return {message: "User added as admin"};
     });
 });
-exports.removeAdmin = functions.https.onCall( (data, context) => {
-    const uid = data.uid;
-    const isAdmin = context.auth.token.admin || false;
-    if (!isAdmin) {
-        return {message: "You must be an admin to remove another admin user"};
+exports.removeAdmin = functions.https.onCall(async (data, context) => {
+    try {
+        const uid = data.uid;
+        const isAdmin = context.auth.token.admin || false;
+        if (!isAdmin) {
+            return {error: "You must be an admin to remove another admin user"};
+        }
+        if (!uid) {
+            return {error: "Please pass a UID to the function"};
+        }
+        
+        // Get current claims and remove admin privilege
+        const userRecord = await admin.auth().getUser(uid);
+        const currentClaims = userRecord.customClaims || {};
+        
+        // Remove admin claim
+        delete currentClaims.admin;
+        
+        await admin.auth().setCustomUserClaims(uid, currentClaims);
+        return {
+            success: true,
+            message: "User removed as admin",
+            uid: uid
+        };
+    } catch (error) {
+        console.error('Error in removeAdmin:', error);
+        return {error: "Failed to remove admin privileges: " + error.message};
     }
-    if (!uid) {
-        return {message: "Please pass a UID to the function"};
-    }
-    return admin.auth().setCustomUserClaims(uid, {admin: true}).then(() => {
-        return {message: "User removed as admin"};
-    });
 });
 exports.getEventAttendance = functions.https.onCall( async (data, context) => {
     const eventId = data.id;
@@ -290,7 +392,7 @@ function formatDateTime(event) {
     // If a start date is provided but an end date isn't, return the start date:
     // Format: Oct 1st 5:45 pm
     if (event.startDate && !event.endDate) {
-      return moment(event.startDate.toDate()).tz("America/Los Angeles").format("MMM Do YYYY, h:mm a");
+      return moment(event.startDate.toDate()).tz("America/Los_Angeles").format("MMM Do YYYY, h:mm a");
     }
     // Format the start and end as dates. Ex: Oct 1st
     const startDate = moment(event.startDate.toDate()).tz("America/Los_Angeles").format("MMM Do, YYYY,");
