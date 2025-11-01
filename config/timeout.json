@@ -1,0 +1,38 @@
+{
+  "payment": {
+    "timeout_ms": 20000,
+    "max_retries": 3,
+    "retry_delay_ms": 2000,
+    "retry_backoff_multiplier": 2.0,
+    "retry_jitter_ms": 500,
+    "circuit_breaker": {
+      "failure_threshold": 5,
+      "recovery_timeout_ms": 60000,
+      "half_open_max_calls": 3
+    }
+  },
+  "database": {
+    "connection_timeout_ms": 10000,
+    "query_timeout_ms": 15000,
+    "pool": {
+      "max_connections": 50,
+      "min_connections": 10,
+      "idle_timeout_ms": 300000,
+      "acquire_timeout_ms": 15000,
+      "validation_timeout_ms": 5000,
+      "leak_detection_threshold_ms": 60000
+    }
+  },
+  "external_services": {
+    "payment_gateway": {
+      "timeout_ms": 20000,
+      "health_check_interval_ms": 30000,
+      "circuit_breaker_enabled": true
+    },
+    "order_service": {
+      "timeout_ms": 12000,
+      "max_concurrent_requests": 150,
+      "rate_limit_per_second": 100
+    }
+  }
+}
